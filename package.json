@@ -1,0 +1,30 @@
+{
+  "name": "quill-pdf",
+  "version": "0.1.0",
+  "description": "Quill PDF — a private, browser-based PDF editor with a Word-style interface. Edit existing text, mark up, sign, merge, split and reorder pages entirely on your own machine.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "pdf",
+    "pdf-editor",
+    "esign",
+    "merge-pdf",
+    "split-pdf",
+    "annotate",
+    "highlighter",
+    "privacy",
+    "offline"
+  ],
+  "author": "mruff-aeq",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mruff-aeq/quill-pdf.git"
+  }
+}
