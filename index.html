@@ -2165,17 +2165,13 @@ const COVER_PAD = 1;
 
 /** Turn a block into an edit box, widened so every original line still fits in the standard font. */
 function editFromBlock(b) {
-  const style = { family: b.family, bold: b.bold, italic: b.italic };
-  const pageW = state.tableViewports ? state.tableViewports.vp0.width : Infinity;
-  const lineW = (l) => (l.runs && l.runs.length)
-    ? l.runs.reduce((w, r) => w + textWidth(l.text.slice(r.start, r.end), b.size, { family: b.family, bold: r.bold, italic: r.italic }), 0)
-    : textWidth(l.text.trim(), b.size, style);
-  const fitW = Math.max(b.w, Math.min(pageW - b.x, Math.max(b.w, ...b.lines.map(lineW)) + 0.5));
-  const extra = fitW - b.w;
+  // The box keeps the text's own footprint. The substitute font can run wider
+  // than the PDF's, so shrink-to-fit starts on: a line that would otherwise
+  // wrap makes the text a touch smaller instead of the box growing or the
+  // text spilling into whatever sits below.
   return {
     kind: 'edit',
-    x: b.x - (b.align === 'center' ? extra / 2 : b.align === 'right' ? extra : 0),
-    y: b.y, w: fitW, h: b.h,
+    x: b.x, y: b.y, w: b.w, h: b.h,
     text: b.text,
     original: b.text,
     lines: b.lines.map(({ x, y, w, h, text }) => ({ x, y, w, h, text })),
@@ -2192,7 +2188,7 @@ function editFromBlock(b) {
     color: b.color,
     bg: b.bg,
     highlight: null,
-    autoFit: b.lines.length === 1,
+    autoFit: true,
   };
 }
 
