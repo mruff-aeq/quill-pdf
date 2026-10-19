@@ -428,7 +428,9 @@ window.__pending = null;
   .tline, .tline-input, .tcell, .tbtn { pointer-events: auto; }
   .tsurface { position: absolute; inset: 0; pointer-events: auto; cursor: text; }
 
-  .tgrid { position: absolute; border: 1px solid rgba(43,87,154,.75); background: rgba(43,87,154,.04); }
+  .tgrid { position: absolute; border: 1px dashed rgba(43,87,154,.55); pointer-events: auto; cursor: pointer; }
+  .tgrid:hover { border-color: var(--word); }
+  .tgrid.sel { border: 1px solid var(--accent); background: rgba(43,87,154,.04); cursor: move; touch-action: none; }
   .tgrid .lbl {
     position: absolute; top: -17px; left: 0; font-size: 10px; background: var(--word); color: #fff;
     padding: 1px 6px; border-radius: 3px 3px 0 0; white-space: nowrap;
@@ -774,7 +776,7 @@ window.__pending = null;
 <!-- Contextual tabs' content. The engine fills #editTools / #selTools. -->
 <div class="ctxbars">
   <div class="cpanel hidden" id="editBar">
-    <span class="hint" id="editHint">Click any text to edit it in place, or click empty space to add a text box. Drag a corner to resize it.</span>
+    <span class="hint" id="editHint">Click any text to edit it in place, or click empty space to add a text box. Click a table for its row and column tools.</span>
     <div class="et-tools hidden" id="editTools"></div>
     <span class="spacer"></span>
     <button class="tb" id="btnEditDone">Exit edit mode</button>
@@ -920,6 +922,7 @@ const state = {
   selected: new Set(),
   zoom: 1,
   activeAnno: null,
+  activeTable: null,   // { page, idx } of the table whose buttons and grips are showing
   nextSrcId: 1,
   editMode: false,
   lines: [],
@@ -2446,20 +2449,29 @@ function drawTableOverlay() {
   const editedKeys = new Set(annos.filter((a) => a.cellKey).map((a) => a.cellKey));
 
   state.tables.forEach((t, ti) => {
+    const selected = isTableSelected(ti);
     const box = document.createElement('div');
-    box.className = 'tgrid';
+    box.className = 'tgrid' + (selected ? ' sel' : '');
     box.dataset.t = ti;
     box.style.left = (t.x * z - 2) + 'px';
     box.style.top = (t.y * z - 2) + 'px';
     box.style.width = (t.w * z + 4) + 'px';
     box.style.height = (t.h * z + 4) + 'px';
+    box.title = selected ? 'Drag to move the table' : 'Click to select the table';
+    // Selected, the frame drags the table; otherwise a press just selects it.
+    box.addEventListener('pointerdown', (e) => {
+      if (selected) startTableMove(e, ti);
+      else { e.stopPropagation(); selectTable(ti); }
+    });
 
-    const lbl = document.createElement('div');
-    lbl.className = 'lbl';
-    lbl.textContent = `✥ Table ${ti + 1} · ${t.rows.length}×${t.cols.length}`;
-    lbl.title = 'Drag to move the table';
-    lbl.addEventListener('pointerdown', (e) => startTableMove(e, ti));
-    box.appendChild(lbl);
+    if (selected) {
+      const lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      lbl.textContent = `✥ Table ${ti + 1} · ${t.rows.length}×${t.cols.length}`;
+      lbl.title = 'Drag to move the table';
+      lbl.addEventListener('pointerdown', (e) => startTableMove(e, ti));
+      box.appendChild(lbl);
+    }
     host.appendChild(box);
 
     t.rows.forEach((row, ri) => {
@@ -2476,13 +2488,15 @@ function drawTableOverlay() {
         cell.style.top = (row.y * z - t.pad * z) + 'px';
         cell.style.width = (col.w * z) + 'px';
         cell.style.height = ((row.h + t.pad * 2) * z) + 'px';
-        cell.title = line ? line.text : 'Empty cell — click to type';
+        cell.title = selected ? (line ? line.text : 'Empty cell — click to type') : 'Click to select the table';
         cell.onclick = (e) => {
           e.stopPropagation();
+          if (!selected) { selectTable(ti); return; }
           editCell(t, ti, ri, ci, cell);
         };
         host.appendChild(cell);
       });
+      if (!selected) return;
 
       // row handles, kept on-page even for tables hard against the left edge
       const ry = (row.y + row.h / 2) * z;
@@ -2495,6 +2509,7 @@ function drawTableOverlay() {
         () => deleteRow(ti, ri), true, { t: ti, r: ri, act: 'row-delete' }));
     });
 
+    if (!selected) return;
     t.cols.forEach((col, ci) => {
       const cx = (col.x + col.w / 2) * z;
       const hy = Math.max(2, t.y * z - 40);
@@ -2537,6 +2552,33 @@ function drawTableOverlay() {
 /** The bottom edge of a row's cell band. */
 function rowBottom(t, row) { return row.y + row.h + t.pad; }
 
+/* ---------- Table selection ----------
+ * Like a text box, a table sits quietly behind an outline until it is clicked;
+ * then its label, row and column buttons and resize grips appear. A click
+ * anywhere else puts them away again.
+ */
+function isTableSelected(ti) {
+  const a = state.activeTable;
+  return !!a && a.page === state.current && a.idx === ti;
+}
+
+function selectTable(ti) {
+  if (isTableSelected(ti)) return;
+  state.activeTable = ti == null ? null : { page: state.current, idx: ti };
+  drawTextHotspots();
+}
+
+document.addEventListener('click', (e) => {
+  if (!state.activeTable || !state.editMode) return;
+  const t = e.target;
+  // The release of a drag lands a click on whatever is under the pointer.
+  if (performance.now() - gestureEndedAt < 80) return;
+  if (t.closest && (t.closest(`[data-t="${state.activeTable.idx}"]`) ||
+      t.closest('#editBar') || t.closest('#tlInput') || t.closest('.tline-input'))) return;
+  editorClosedBy = e;   // the click that put the table away does not also add a text box
+  selectTable(null);
+}, true);
+
 /* ---------- Dragging tables ----------
  * The label moves the whole table; a grip on a column's right edge or a row's
  * bottom edge changes its size. The overlay follows the pointer as a preview,
@@ -2565,6 +2607,7 @@ function startTableMove(e, ti) {
   e.preventDefault();
   e.stopPropagation();
   closeTextEditor();
+  if (!isTableSelected(ti)) state.activeTable = { page: state.current, idx: ti };
   const els = tableOverlay(ti);
   const z = state.zoom;
   let moved = false, ux = 0, uy = 0;
@@ -2578,6 +2621,7 @@ function startTableMove(e, ti) {
     });
   }, () => {
     if (moved) moveTable(ti, ux, uy);
+    else drawTextHotspots();
   });
 }
 
@@ -3040,6 +3084,7 @@ async function withBakedTable(ti, fn) {
   }
   const t = state.tables[idx];
   if (!t) { alert('The table could not be located after the previous change.'); return; }
+  state.activeTable = { page: state.current, idx };
   await fn(t, idx);
   refreshOverlays();
 }
@@ -5136,6 +5181,7 @@ $('btnExtract').onclick = async () => {
 /* ---------- Edit-text mode ---------- */
 function setEditMode(on) {
   state.editMode = on && state.pages.length > 0;
+  if (!state.editMode) state.activeTable = null;
   if (state.editMode && state.markMode) setMarkMode(null);
   $('btnEdit').classList.toggle('on', state.editMode);
   $('editBar').classList.toggle('hidden', !state.editMode);

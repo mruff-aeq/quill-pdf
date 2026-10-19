@@ -26,8 +26,8 @@ Click **Edit text**. Click any line. Type. Done.
 
 - Keep font, size, bold, colour. Even bold word in middle of line stay bold.
 - Keep where it was. Centre stay centre. Bullet stay bullet.
-- Table too. Click cell, type. Add row. Add column. Delete row.
-- Table wrong place? Drag label, table move. Drag edge of row or column, it grow or shrink.
+- Table too. Click table, tools appear. Click cell, type. Add row. Add column. Delete row. Click away, tools hide.
+- Table wrong place? Drag frame, table move. Drag edge of row or column, it grow or shrink.
 - Too long? Text shrink little to fit. Not shrink too much. Cave can read.
 - Box wrong size? Grab any corner. Pull. Box change shape, text wrap to fit.
 
