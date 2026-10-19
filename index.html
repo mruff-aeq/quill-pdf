@@ -3200,7 +3200,9 @@ function openTextEditor(a, isNew) {
     ta.style.color = a.color;
     ta.style.textDecoration = a.underline ? 'underline' : 'none';
     ta.style.height = '0';
-    ta.style.height = Math.max(ta.scrollHeight, L.lead * z) + 'px';
+    // Fill the whole box, so the dashed outline follows a dragged corner, not just the text.
+    const H = Math.max(a.h, L.height);
+    ta.style.height = Math.max(ta.scrollHeight, L.lead * z, (H - (top - a.y)) * z) + 'px';
   };
   const changed = () => { drawLayer(); fit(); };
 
