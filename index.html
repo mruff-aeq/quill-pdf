@@ -432,7 +432,20 @@ window.__pending = null;
   .tgrid .lbl {
     position: absolute; top: -17px; left: 0; font-size: 10px; background: var(--word); color: #fff;
     padding: 1px 6px; border-radius: 3px 3px 0 0; white-space: nowrap;
+    cursor: move; pointer-events: auto; touch-action: none; user-select: none;
   }
+  .tgrid .lbl:hover { background: var(--word-dk); }
+  /* Drag grips on every column's right edge and every row's bottom edge. */
+  .tgrip { position: absolute; pointer-events: auto; touch-action: none; }
+  .tgrip.col { width: 11px; margin-left: -5px; cursor: col-resize; }
+  .tgrip.row { height: 11px; margin-top: -5px; cursor: row-resize; }
+  .tgrip::after { content: ''; position: absolute; background: var(--word); opacity: 0; transition: opacity .1s; }
+  .tgrip.col::after { left: 5px; top: 0; bottom: 0; width: 1px; }
+  .tgrip.row::after { top: 5px; left: 0; right: 0; height: 1px; }
+  .tgrip:hover::after { opacity: .6; }
+  .tgrip.live::after { opacity: 1; }
+  .tgrip.col.live::after { width: 2px; }
+  .tgrip.row.live::after { height: 2px; }
   .tcell { position: absolute; cursor: text; border: 1px solid transparent; background: rgba(43,87,154,.06); }
   .tcell:hover { background: rgba(43,87,154,.22); border-color: var(--word); }
   .tcell.empty { background: rgba(43,87,154,.025); }
@@ -2282,13 +2295,22 @@ function detectTables() {
     }
   });
 
+  // A row the user dragged taller is remembered as a band on the page: the
+  // rows either side of it stay one table however wide the gap, and the row
+  // keeps its height when the table is detected again after a bake.
+  const bands = state.pages[state.current].bands || [];
+  // A band ends at the row's cell edge; the next row's text starts one gutter further down.
+  const bandJoins = (a, b) => bands.some((bd) =>
+    a.bottom >= bd.y - 1 && b.top <= bd.y + bd.h + medianH &&
+    Math.min(...a.cells.map((c) => c.x)) < bd.x + bd.w && Math.max(...a.cells.map((c) => c.x + c.w)) > bd.x);
+
   // 2. runs of vertically adjacent rows
   let run = [];
   const rawRuns = [];
   const flush = () => { if (run.length) rawRuns.push(run); run = []; };
   rows.forEach((r, i) => {
     const prev = rows[i - 1];
-    const adjacent = prev && (r.top - prev.bottom) < medianH * 2.6;
+    const adjacent = prev && ((r.top - prev.bottom) < medianH * 2.6 || bandJoins(prev, r));
     if (!run.length || adjacent) run.push(r);
     else { flush(); run = [r]; }
   });
@@ -2306,9 +2328,10 @@ function detectTables() {
     for (let i = 1; i < r.length; i++) {
       const gap = r[i].top - r[i - 1].top;
       if (pitch === null) { pitch = gap; group.push(r[i]); continue; }
-      if (Math.abs(gap - pitch) / pitch <= 0.4) {
+      const joined = bandJoins(r[i - 1], r[i]);
+      if (joined || Math.abs(gap - pitch) / pitch <= 0.4) {
         group.push(r[i]);
-        pitch = (pitch + gap) / 2;
+        if (!joined) pitch = (pitch + gap) / 2;   // a stretched row is not the table's rhythm
       } else {
         runs.push(group);
         group = [r[i]];
@@ -2358,6 +2381,7 @@ function detectTables() {
       return {
         y: r.top,
         h,
+        th: h,   // the text's own height; `h` can be dragged taller than it
         baseline: Math.max(...r.cells.map((c) => c.y + c.bl)),
         size: Math.max(...r.cells.map((c) => c.size)),
         cells: cols.map((col) => {
@@ -2372,15 +2396,22 @@ function detectTables() {
 
     // pad rows to a uniform height so inserted rows look native
     const gaps = rowObjs.slice(1).map((r, i) => r.y - (rowObjs[i].y + rowObjs[i].h));
-    const pitch = rowObjs.length > 1
-      ? (rowObjs[rowObjs.length - 1].y - rowObjs[0].y) / (rowObjs.length - 1)
-      : rowObjs[0].h * 1.8;
+    // The typical row advance (the median, so one stretched row does not skew it).
+    const steps = rowObjs.slice(1).map((r, i) => r.y - rowObjs[i].y).sort((a, b) => a - b);
+    const pitch = steps.length ? steps[Math.floor(steps.length / 2)] : rowObjs[0].h * 1.8;
+    const pad = gaps.length ? Math.max(2, Math.min(...gaps) / 2) : 4;
+
+    // Give a dragged-taller row its remembered height back.
+    for (const row of rowObjs) {
+      const band = bands.find((bd) => row.y >= bd.y - 1 && row.y + row.th <= bd.y + bd.h + 1 &&
+        x0 < bd.x + bd.w && x1 > bd.x);
+      if (band) row.h = Math.max(row.h, band.y + band.h - pad - row.y);
+    }
 
     state.tables.push({
       x: x0, y: rowObjs[0].y, w: x1 - x0,
       h: rowObjs[rowObjs.length - 1].y + rowObjs[rowObjs.length - 1].h - rowObjs[0].y,
-      cols, rows: rowObjs, pitch,
-      pad: gaps.length ? Math.max(2, Math.min(...gaps) / 2) : 4,
+      cols, rows: rowObjs, pitch, pad,
       bordered: false,
     });
   }
@@ -2417,6 +2448,7 @@ function drawTableOverlay() {
   state.tables.forEach((t, ti) => {
     const box = document.createElement('div');
     box.className = 'tgrid';
+    box.dataset.t = ti;
     box.style.left = (t.x * z - 2) + 'px';
     box.style.top = (t.y * z - 2) + 'px';
     box.style.width = (t.w * z + 4) + 'px';
@@ -2424,7 +2456,9 @@ function drawTableOverlay() {
 
     const lbl = document.createElement('div');
     lbl.className = 'lbl';
-    lbl.textContent = `Table ${ti + 1} · ${t.rows.length}×${t.cols.length}`;
+    lbl.textContent = `✥ Table ${ti + 1} · ${t.rows.length}×${t.cols.length}`;
+    lbl.title = 'Drag to move the table';
+    lbl.addEventListener('pointerdown', (e) => startTableMove(e, ti));
     box.appendChild(lbl);
     host.appendChild(box);
 
@@ -2471,6 +2505,239 @@ function drawTableOverlay() {
       host.appendChild(tableBtn('×', cx - 8, hy + 19, 'Delete this column',
         () => deleteCol(ti, ci), true, { t: ti, c: ci, act: 'col-delete' }));
     });
+
+    // Resize grips last, so they sit above the cells they border.
+    t.cols.forEach((col, ci) => {
+      const g = document.createElement('div');
+      g.className = 'tgrip col';
+      g.dataset.t = ti;
+      g.dataset.c = ci;
+      g.title = 'Drag to make this column wider or narrower';
+      g.style.left = ((col.x + col.w) * z) + 'px';
+      g.style.top = ((t.y - t.pad) * z) + 'px';
+      g.style.height = ((t.h + t.pad * 2) * z) + 'px';
+      g.addEventListener('pointerdown', (e) => startTableResize(e, ti, 'col', ci));
+      host.appendChild(g);
+    });
+    t.rows.forEach((row, ri) => {
+      const g = document.createElement('div');
+      g.className = 'tgrip row';
+      g.dataset.t = ti;
+      g.dataset.r = ri;
+      g.title = 'Drag to make this row taller or shorter';
+      g.style.left = (t.x * z) + 'px';
+      g.style.top = (rowBottom(t, row) * z) + 'px';
+      g.style.width = (t.w * z) + 'px';
+      g.addEventListener('pointerdown', (e) => startTableResize(e, ti, 'row', ri));
+      host.appendChild(g);
+    });
+  });
+}
+
+/** The bottom edge of a row's cell band. */
+function rowBottom(t, row) { return row.y + row.h + t.pad; }
+
+/* ---------- Dragging tables ----------
+ * The label moves the whole table; a grip on a column's right edge or a row's
+ * bottom edge changes its size. The overlay follows the pointer as a preview,
+ * and the page itself changes once, on release, through the same baked shift
+ * machinery as inserting and deleting rows and columns.
+ */
+
+/** Pointer travel on screen, turned back into the unrotated text layer's units. */
+function layerDelta(dx, dy) {
+  const turn = state.pages[state.current].rotation * Math.PI / 180;
+  const z = state.zoom;
+  return [(dx * Math.cos(turn) + dy * Math.sin(turn)) / z, (-dx * Math.sin(turn) + dy * Math.cos(turn)) / z];
+}
+
+/** Every overlay element of table `ti`, with the geometry it was drawn at. */
+function tableOverlay(ti) {
+  return [...$('tlHots').querySelectorAll(`[data-t="${ti}"]`)].map((el) => ({
+    el,
+    left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0,
+    width: parseFloat(el.style.width) || 0, height: parseFloat(el.style.height) || 0,
+  }));
+}
+
+function startTableMove(e, ti) {
+  if (e.button !== 0 || baking) return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeTextEditor();
+  const els = tableOverlay(ti);
+  const z = state.zoom;
+  let moved = false, ux = 0, uy = 0;
+  trackPointer(e, (dx, dy) => {
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    moved = true;
+    [ux, uy] = layerDelta(dx, dy);
+    els.forEach(({ el, left, top }) => {
+      el.style.left = (left + ux * z) + 'px';
+      el.style.top = (top + uy * z) + 'px';
+    });
+  }, () => {
+    if (moved) moveTable(ti, ux, uy);
+  });
+}
+
+function startTableResize(e, ti, axis, idx) {
+  if (e.button !== 0 || baking) return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeTextEditor();
+  const t = state.tables[ti];
+  if (!t) return;
+  const z = state.zoom;
+  const els = tableOverlay(ti);
+  const grip = e.currentTarget;
+  grip.classList.add('live');
+  const key = axis === 'col' ? 'c' : 'r';
+  const [lo, hi] = axis === 'col' ? colLimits(t, idx) : rowLimits(t, idx);
+  let d = 0, moved = false;
+
+  trackPointer(e, (dx, dy) => {
+    const [ux, uy] = layerDelta(dx, dy);
+    d = Math.max(lo, Math.min(hi, axis === 'col' ? ux : uy));
+    if (!moved && Math.abs(d) * z < 3) return;
+    moved = true;
+    const grow = (el, base) => { el.style[axis === 'col' ? 'width' : 'height'] = (base + d * z) + 'px'; };
+    const shift = (el, base) => { el.style[axis === 'col' ? 'left' : 'top'] = (base + d * z) + 'px'; };
+    els.forEach(({ el, left, top, width, height }) => {
+      const along = axis === 'col' ? left : top;
+      const size = axis === 'col' ? width : height;
+      const isGrip = el.classList.contains('tgrip');
+      if (el.classList.contains('tgrid') || (isGrip && el.dataset[key] === undefined)) return grow(el, size);
+      if (el.dataset[key] === undefined) return;   // the other axis's buttons
+      const n = +el.dataset[key];
+      if (n > idx) shift(el, along);
+      else if (n === idx && isGrip) shift(el, along);
+      else if (n === idx && el.classList.contains('tcell')) grow(el, size);
+    });
+  }, () => {
+    grip.classList.remove('live');
+    if (!moved) return;
+    if (Math.abs(d) < 0.5) { drawTextHotspots(); return; }
+    if (axis === 'col') resizeCol(ti, idx, d); else resizeRow(ti, idx, d);
+  });
+}
+
+const MIN_COL_W = 26;
+
+/** How far a column's right edge may move: not thinner than MIN_COL_W, not off the page. */
+function colLimits(t, ci) {
+  return [MIN_COL_W - t.cols[ci].w, Math.max(0, state.pageWidth - 12 - (t.x + t.w))];
+}
+
+/** How far a row's bottom edge may move: not shorter than its text, not off the page. */
+function rowLimits(t, ri) {
+  const row = t.rows[ri];
+  return [rowTextHeight(row) - row.h, Math.max(0, state.pageHeight - 12 - (t.y + t.h + t.pad))];
+}
+
+function rowTextHeight(row) {
+  if (row.th != null) return row.th;
+  const hs = row.cells.filter(Boolean).map((c) => c.h);
+  return hs.length ? Math.max(...hs) : (row.size || 10) * 1.06;
+}
+
+/** The whole table and its ruling, with a margin, as a cover rectangle. */
+function tableCover(t) {
+  return { x: t.x - 5, y: t.y - t.pad - 5, w: t.w + 10, h: t.h + t.pad * 2 + 10 };
+}
+
+/** Forget the stretched rows remembered for this table's area, then remember the current ones. */
+function rememberBands(t, forgetOnly = false) {
+  const item = state.pages[state.current];
+  if (!item.bands) item.bands = [];
+  item.bands = item.bands.filter((b) =>
+    !(b.x < t.x + t.w && b.x + b.w > t.x && b.y < t.y + t.h + t.pad && b.y + b.h > t.y - t.pad));
+  if (forgetOnly) return;
+  for (const row of t.rows) {
+    if (row.h <= rowTextHeight(row) + 0.5) continue;
+    item.bands.push({ x: t.x, y: row.y - t.pad, w: t.w, h: row.h + t.pad * 2 });
+  }
+}
+
+async function moveTable(ti, dx, dy) {
+  await withBakedTable(ti, (t) => {
+    const annos = state.pages[state.current].annos;
+    rememberBands(t, true);
+    shiftLines(t, tableCover(t), () => true, dx, dy, annos);
+    t.x += dx;
+    t.y += dy;
+    t.cols.forEach((c) => { c.x += dx; });
+    t.rows.forEach((r) => {
+      r.y += dy;
+      r.baseline += dy;
+      r.cells.forEach((c) => { if (c) { c.x += dx; c.y += dy; } });
+    });
+    drawFullGrid(t, annos);
+    rememberBands(t);
+    setStatus('Table moved.');
+  });
+}
+
+/** Shrink the lines of column `ci` that would no longer fit a width of `newW`. */
+function refitColumn(t, ci, newW, annos) {
+  const item = state.pages[state.current];
+  const col = t.cols[ci];
+  const right = col.x + newW - 6;   // keep a gap, or the next column merges into this one
+  for (const l of linesInTable(t)) {
+    const cx = l.x + l.w / 2;
+    if (cx < col.x || cx >= col.x + col.w || l.x + l.w <= right) continue;
+    retire(item, l);
+    annos.push({ kind: 'cover', x: l.x - 1, y: l.y - 1, w: l.w + 2, h: l.h + 2, color: '#ffffff' });
+    annos.push({
+      kind: 'draw', x: l.x, y: l.y, w: Math.max(10, right - l.x), h: l.h, bl: l.bl,
+      text: l.text, size: l.size, family: l.family,
+      bold: l.bold, italic: l.italic, color: l.color, autoFit: true,
+    });
+  }
+}
+
+async function resizeCol(ti, ci, dx) {
+  await withBakedTable(ti, (t) => {
+    const annos = state.pages[state.current].annos;
+    const col = t.cols[ci];
+    const [lo, hi] = colLimits(t, ci);
+    dx = Math.max(lo, Math.min(hi, dx));
+    if (Math.abs(dx) < 0.5) return;
+    rememberBands(t, true);
+    if (dx < 0) refitColumn(t, ci, col.w + dx, annos);
+    shiftRegionRight(t, col.x + col.w, dx, annos);
+    col.w += dx;
+    for (let i = ci + 1; i < t.cols.length; i++) t.cols[i].x += dx;
+    t.rows.forEach((r) => r.cells.forEach((c, i) => { if (c && i > ci) c.x += dx; }));
+    t.w += dx;
+    drawFullGrid(t, annos);
+    rememberBands(t);
+    setStatus('Column resized.');
+  });
+}
+
+async function resizeRow(ti, ri, dy) {
+  await withBakedTable(ti, (t) => {
+    const annos = state.pages[state.current].annos;
+    const row = t.rows[ri];
+    const [lo, hi] = rowLimits(t, ri);
+    dy = Math.max(lo, Math.min(hi, dy));
+    if (Math.abs(dy) < 0.5) return;
+    rememberBands(t, true);
+    const edge = rowBottom(t, row);
+    // The rule along the old edge would otherwise stay behind inside the row.
+    if (t.bordered) annos.push({ kind: 'cover', x: t.x - 2, y: edge - 2, w: t.w + 4, h: 4, color: '#ffffff' });
+    shiftPageBelow(edge, dy, annos);
+    row.h += dy;
+    for (let i = ri + 1; i < t.rows.length; i++) {
+      t.rows[i].y += dy;
+      t.rows[i].baseline += dy;
+      t.rows[i].cells.forEach((c) => { if (c) c.y += dy; });
+    }
+    t.h += dy;
+    drawFullGrid(t, annos);
+    rememberBands(t);
+    setStatus('Row resized.');
   });
 }
 
@@ -2607,6 +2874,7 @@ async function bakeDocument() {
       srcId: 0, srcIndex: i, rotation: p.rotation, annos: [],
       retired: p.retired ? [...p.retired] : [],
       ruled: p.ruled ? [...p.ruled] : [],
+      bands: p.bands ? [...p.bands] : [],
     }));
     state.activeAnno = null;
     await renderThumbs();
@@ -4416,6 +4684,7 @@ function duplicatePage(i) {
     annos: JSON.parse(JSON.stringify(p.annos)),
     retired: p.retired ? JSON.parse(JSON.stringify(p.retired)) : [],
     ruled: p.ruled ? JSON.parse(JSON.stringify(p.ruled)) : [],
+    bands: p.bands ? JSON.parse(JSON.stringify(p.bands)) : [],
   });
   renderThumbs();
 }
