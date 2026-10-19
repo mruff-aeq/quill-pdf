@@ -28,6 +28,7 @@ Click **Edit text**. Click any line. Type. Done.
 - Keep where it was. Centre stay centre. Bullet stay bullet.
 - Table too. Click cell, type. Add row. Add column. Delete row.
 - Too long? Text shrink little to fit. Not shrink too much. Cave can read.
+- Box wrong size? Grab any corner. Pull. Box change shape, text wrap to fit.
 
 ### 🖍️ Mark up
 
@@ -42,7 +43,7 @@ Snap to text line. Cave not need steady hand.
 ### ➕ Add things
 
 - Text box. Picture. Drawn signature. Box.
-- Drag to move. Corner to resize. Handle to rotate.
+- Drag to move. Any corner to resize. Handle to rotate.
 
 ### 📄 Pages
 

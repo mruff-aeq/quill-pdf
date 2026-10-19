@@ -389,10 +389,16 @@ window.__pending = null;
   .anno.text { white-space: pre; line-height: 1; padding: 0; }
   .anno img { width: 100%; height: 100%; display: block; pointer-events: none; }
   .handle {
-    position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px;
-    background: #fff; border: 1.5px solid var(--accent); border-radius: 50%; cursor: nwse-resize; display: none;
+    position: absolute; width: 11px; height: 11px; margin: -6px;
+    background: #fff; border: 1.5px solid var(--accent); border-radius: 50%; display: none;
+    pointer-events: auto; touch-action: none;
   }
-  .anno.sel .handle { display: block; }
+  .handle::before { content: ''; position: absolute; inset: -7px; }   /* finger-sized hit area */
+  .handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+  .handle.ne { right: 0; top: 0; cursor: nesw-resize; }
+  .handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+  .handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+  .anno.sel .handle, .tframe .handle { display: block; }
   .rot-handle {
     position: absolute; left: 50%; top: -28px; width: 14px; height: 14px; margin-left: -7px;
     border-radius: 50%; background: #fff; border: 2px solid var(--accent); cursor: grab; display: none;
@@ -755,7 +761,7 @@ window.__pending = null;
 <!-- Contextual tabs' content. The engine fills #editTools / #selTools. -->
 <div class="ctxbars">
   <div class="cpanel hidden" id="editBar">
-    <span class="hint" id="editHint">Click any text to edit it in place, or click empty space to add a text box.</span>
+    <span class="hint" id="editHint">Click any text to edit it in place, or click empty space to add a text box. Drag a corner to resize it.</span>
     <div class="et-tools hidden" id="editTools"></div>
     <span class="spacer"></span>
     <button class="tb" id="btnEditDone">Exit edit mode</button>
@@ -3163,6 +3169,7 @@ function openTextEditor(a, isNew) {
   grip.textContent = '✥';
   grip.addEventListener('pointerdown', (e) => startDrag(e, a));
   frame.appendChild(grip);
+  addResizeHandles(frame, a);
   $('tlInput').appendChild(frame);
 
   editor = { a, finish, frame, fit: () => fit(), refocus: () => refocus(), renderBar: () => renderBar() };
@@ -3614,12 +3621,7 @@ function drawLayer() {
       el.style.background = a.color;
     }
 
-    if (a.kind === 'image' || a.kind === 'rect') {
-      const h = document.createElement('div');
-      h.className = 'handle';
-      h.addEventListener('pointerdown', (e) => startResize(e, a));
-      el.appendChild(h);
-    }
+    if (a.kind === 'image' || a.kind === 'rect' || a.kind === 'text') addResizeHandles(el, a);
     if (a.url) {
       const b = document.createElement('div');
       b.className = 'link-badge';
@@ -3704,9 +3706,10 @@ function applyRotation(a) {
   if (a.kind === 'edit') {
     const content = el && el.querySelector('.edit-content');
     if (content) content.style.transform = t;
-    if (editor && editor.a === a) editor.fit();
+    if (editor && editor.a === a) { editor.fit(); handleCursors(editor.frame, a); }
   } else if (el) {
     el.style.transform = t;
+    handleCursors(el, a);
   }
 }
 
@@ -3824,28 +3827,92 @@ function startDrag(e, anno) {
   });
 }
 
-function startResize(e, anno) {
+const CORNERS = ['nw', 'ne', 'sw', 'se'];
+
+/** One grab handle on each corner of `host`; dragging one resizes `anno`. */
+function addResizeHandles(host, anno) {
+  CORNERS.forEach((corner) => {
+    const h = document.createElement('div');
+    h.className = 'handle ' + corner;
+    h.title = 'Drag to resize';
+    h.addEventListener('pointerdown', (e) => startResize(e, anno, corner));
+    h.addEventListener('dblclick', (e) => e.stopPropagation());
+    host.appendChild(h);
+  });
+  handleCursors(host, anno);
+}
+
+/** Point each corner's resize cursor the way that corner actually faces once the item is turned. */
+function handleCursors(host, anno) {
+  const pageTurn = anno.kind === 'edit' && state.pages.length ? state.pages[state.current].rotation : 0;
+  const rot = (anno.rot || 0) + pageTurn;
+  const CURSORS = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize'];
+  host.querySelectorAll(':scope > .handle').forEach((h) => {
+    const corner = CORNERS.find((c) => h.classList.contains(c));
+    const base = { nw: 0, ne: 90, se: 180, sw: 270 }[corner];   // which way the corner's diagonal points
+    h.style.cursor = CURSORS[((Math.round((base + rot) / 45) % 8) + 8) % 8 % 4];
+  });
+}
+
+/**
+ * Stretch or shrink an item from any corner; the opposite corner stays put.
+ * A rotated item resizes along its own axes. A text box re-wraps its text to
+ * the new width and the height becomes its minimum height (with "Shrink to
+ * fit" on, the font shrinks until the text fits). A ＋Text item has no width
+ * of its own, so its font is scaled instead and the box follows the text.
+ */
+function startResize(e, anno, corner = 'se') {
   if (e.button !== 0) return;
   e.preventDefault();
   e.stopPropagation();
-  if (state.activeAnno !== anno) markSelected(anno);
+  if (anno.kind !== 'edit' && state.activeAnno !== anno) markSelected(anno);
   const z = state.zoom;
-  const ow = anno.w;
-  const oh = anno.h;
-  // A rotated item resizes along its own axes, with its top-left corner pinned.
+  const sx = corner.includes('e') ? 1 : -1;   // which way the dragged corner moves the width
+  const sy = corner.includes('s') ? 1 : -1;
+  const b0 = annoBox(anno);
+  const ow = b0.w, oh = b0.h;
+  const size0 = anno.size;
+  // The item's own rotation, which turns the pointer travel into box-axis travel…
   const t = (anno.rot || 0) * Math.PI / 180;
   const cos = Math.cos(t), sin = Math.sin(t);
-  const [tlx, tly] = rotatePoint(anno, anno.x, anno.y);
+  // …plus, for an edit box, the page rotation its unrotated layer is shown under.
+  const turn = t + (anno.kind === 'edit' ? state.pages[state.current].rotation * Math.PI / 180 : 0);
+  const tcos = Math.cos(turn), tsin = Math.sin(turn);
+  // The corner opposite the one being dragged, where it sits on screen.
+  const [px, py] = rotatePoint(anno, sx > 0 ? b0.x : b0.x + ow, sy > 0 ? b0.y : b0.y + oh, b0);
+
+  const place = (w, h) => {
+    // Put the centre at the pinned corner plus half the (rotated) new box.
+    const hx = sx * w / 2, hy = sy * h / 2;
+    anno.x = px + hx * cos - hy * sin - w / 2;
+    anno.y = py + hx * sin + hy * cos - h / 2;
+  };
 
   trackPointer(e, (dx, dy) => {
-    const lx = (dx * cos + dy * sin) / z;
-    const ly = (-dx * sin + dy * cos) / z;
-    anno.w = Math.max(12, ow + lx);
-    anno.h = Math.max(12, oh + ly);
-    const cx = tlx + (anno.w / 2) * cos - (anno.h / 2) * sin;
-    const cy = tly + (anno.w / 2) * sin + (anno.h / 2) * cos;
-    anno.x = cx - anno.w / 2;
-    anno.y = cy - anno.h / 2;
+    const lx = (dx * tcos + dy * tsin) / z;
+    const ly = (-dx * tsin + dy * tcos) / z;
+    const w = ow + sx * lx, h = oh + sy * ly;
+
+    if (anno.kind === 'text') {
+      // Scale the font by whichever side the pointer is changing the most.
+      const rw = w / ow, rh = h / oh;
+      const ratio = Math.abs(rw - 1) >= Math.abs(rh - 1) ? rw : rh;
+      anno.size = Math.min(400, Math.max(4, size0 * Math.max(0.05, ratio)));
+      const b = annoBox(anno);
+      place(b.w, b.h);
+      drawLayer();
+      return;
+    }
+
+    anno.w = Math.max(anno.kind === 'edit' ? 20 : 12, w);
+    anno.h = Math.max(anno.kind === 'edit' ? anno.size * 1.06 : 12, h);
+    if (anno.kind === 'edit') {
+      place(anno.w, annoBox(anno).h);   // the box shown is at least as tall as its text
+      drawLayer();
+      if (editor && editor.a === anno) editor.fit();
+      return;
+    }
+    place(anno.w, anno.h);
     const el = annoEls.get(anno);
     if (el) {
       el.style.left = (anno.x * z) + 'px';
@@ -3853,6 +3920,10 @@ function startResize(e, anno) {
       el.style.width = (anno.w * z) + 'px';
       el.style.height = (anno.h * z) + 'px';
     }
+  }, () => {
+    if (anno.kind === 'edit') drawTextHotspots();
+    if (editor && editor.a === anno) { editor.renderBar(); editor.refocus(); }
+    else renderSelBar();
   });
 }
 
