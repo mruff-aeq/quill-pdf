@@ -621,6 +621,8 @@ window.__pending = null;
   <symbol id="i-st" viewBox="0 0 24 24"><path d="M16.5 7A4.5 4.5 0 0 0 12 4C9.5 4 7.5 5.5 7.5 7.5S9.8 10.5 12 10.5"/><path d="M7.5 17A4.5 4.5 0 0 0 12 20c2.5 0 4.5-1.5 4.5-3.5S14.2 13.5 12 13.5"/><path d="M4 12h16"/></symbol>
   <symbol id="i-blank" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 10v6M9 13h6"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+  <symbol id="i-front" viewBox="0 0 24 24"><rect x="3" y="9" width="12" height="12" rx="1" stroke-dasharray="2 2"/><rect x="9" y="3" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".2"/><path d="M15 9l-5 5M15 9v4M15 9h-4"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><rect x="9" y="3" width="12" height="12" rx="1" stroke-dasharray="2 2"/><rect x="3" y="9" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".2"/><path d="M9 15l5-5M9 15v-4M9 15h4"/></symbol>
   <symbol id="i-box" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1" fill="currentColor" fill-opacity=".15"/></symbol>
   <symbol id="i-rotl" viewBox="0 0 24 24"><path d="M3 5v5h5"/><path d="M3.5 10a8.5 8.5 0 1 1 1.6 5.5"/><rect x="9" y="12" width="9" height="8" rx="1"/></symbol>
   <symbol id="i-rotr" viewBox="0 0 24 24"><path d="M21 5v5h-5"/><path d="M20.5 10a8.5 8.5 0 1 0-1.6 5.5"/><rect x="6" y="12" width="9" height="8" rx="1"/></symbol>
@@ -724,6 +726,8 @@ window.__pending = null;
           <button class="rb big" id="btnUnderline" title="Underline: drag across text to underline it (Esc to finish)"><svg class="ic big"><use href="#i-ul"/></svg><i class="hl-chip" id="ulSwatch"></i><span>Underline</span></button>
           <button class="rb big" id="btnStrike" title="Strikethrough: drag across text to strike it out (Esc to finish)"><svg class="ic big"><use href="#i-st"/></svg><i class="hl-chip" id="stSwatch"></i><span>Strike<br>through</span></button>
           <label class="rb big hl-pick" for="hlColor" title="Marker colour"><span class="hl-presets" id="hlPresets"></span><span>Colour</span><input type="color" id="hlColor" value="#ffff00" /></label>
+          <button class="rb big" id="btnFront" title="Bring the selected item in front of everything else (Ctrl+Shift+])" disabled><svg class="ic big"><use href="#i-front"/></svg><span>Bring to<br>front</span></button>
+          <button class="rb big" id="btnBack" title="Send the selected item behind everything else (Ctrl+Shift+[)" disabled><svg class="ic big"><use href="#i-back"/></svg><span>Send to<br>back</span></button>
         </div>
         <div class="rg-label">Markup</div>
       </div>
@@ -3502,6 +3506,7 @@ function openTextEditor(a, isNew) {
 
   editor = { a, finish, frame, fit: () => fit(), refocus: () => refocus(), renderBar: () => renderBar() };
   state.activeAnno = a;
+  updateLayerButtons();
   drawLayer();
   drawTextHotspots();
   renderSelBar();
@@ -3772,6 +3777,11 @@ function openTextEditor(a, isNew) {
   // editor has closed and the overlays have been rebuilt.
   const outside = (e) => {
     if (frame.contains(e.target) || $('editBar').contains(e.target)) return;
+    // Opening the ribbon sheet, switching its tabs, or using its Bring to
+    // front / Send to back buttons acts on this box, so it stays open.
+    const t = e.target;
+    if (t.closest('#mTabBtn, #scrim, #btnFront, #btnBack, .rtab, .sheet-handle')) return;
+    if (t.closest('#ribbon') && !t.closest('button, label')) return;
     // The click that ends a rotate drag released somewhere off the handle.
     if (performance.now() - gestureEndedAt < 80) return;
     editorClosedBy = e;
@@ -4058,6 +4068,27 @@ function layerKey(e) {
   if (!fwd && !bwd) return null;
   return fwd ? (e.shiftKey ? 'front' : 'forward') : (e.shiftKey ? 'back' : 'backward');
 }
+
+/** The item the ribbon's layer buttons act on: the box being typed into, else the selection. */
+function layerTarget() {
+  return editor ? editor.a : state.activeAnno;
+}
+
+function updateLayerButtons() {
+  const off = !layerTarget();
+  $('btnFront').disabled = off;
+  $('btnBack').disabled = off;
+}
+
+function layerFromRibbon(how) {
+  const a = layerTarget();
+  if (!a || !reorderAnno(a, how)) return;
+  drawLayer();
+  drawTextHotspots();
+  if (editor) { editor.fit(); editor.refocus(); } else renderSelBar();
+}
+$('btnFront').onclick = () => layerFromRibbon('front');
+$('btnBack').onclick = () => layerFromRibbon('back');
 
 /** The four layer buttons, built with whichever toolbar's button helper is passed in. */
 function layerButtons(a, button) {
@@ -4585,6 +4616,7 @@ function selectAnno(a) {
  * toolbar. Edit boxes bring their own toolbar while they are being typed into.
  */
 function renderSelBar() {
+  updateLayerButtons();
   const bar = $('selBar');
   const tools = $('selTools');
   tools.textContent = '';
