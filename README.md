@@ -45,7 +45,8 @@ Snap to text line. Cave not need steady hand.
 
 - Text box. Picture. Drawn signature. Box.
 - Drag to move. Any corner to resize. Handle to rotate.
-- Thing hide behind other thing? Click it. ▲ bring forward. ▼ send back. ⤒ to front. ⤓ to back. Ctrl+] and Ctrl+[ same. Shift for front and back.
+- Every thing has layer number. Page itself is layer 1. New thing start on layer 1, in front of page. Smaller number go behind page: page ink print over it. Bigger number sit in front.
+- Thing hide behind other thing? Click it. Type layer number, or ▲ up one, ▼ down one, ⤒ above all, ⤓ below all. Ctrl+] and Ctrl+[ same. Shift for above all and below all.
 - On phone: pick thing, open menu, Home, Markup. Bring to front. Send to back.
 
 ### 📄 Pages

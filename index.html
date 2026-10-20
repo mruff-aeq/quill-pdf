@@ -240,6 +240,7 @@ window.__pending = null;
   .et-tools select, .et-tools input[type=number] { width: auto; height: 26px; padding: 1px 4px; font-size: 12px; }
   .et-tools input.tb-size { width: 56px; }
   .et-tools input.tb-width { width: 62px; }
+  .et-tools input.tb-layer { width: 48px; }
   .et-tools .lbl { color: var(--muted); margin-left: 2px; font-size: 11.5px; }
   .et-tools input[type=range] { width: 90px; }
   .et-tools .tb-swatch {
@@ -324,9 +325,12 @@ window.__pending = null;
     overflow: auto; display: flex; flex-direction: column; align-items: safe center;
     padding: 28px 24px 40px; background: var(--canvas); min-height: 0;
   }
-  .stage { position: relative; flex: none; background: #fff; box-shadow: 0 0 0 1px #c6c6c6, 0 2px 10px rgba(0,0,0,.18); }
-  .stage canvas { display: block; }
-  #layer { position: absolute; inset: 0; pointer-events: none; }
+  .stage { position: relative; flex: none; background: #fff; box-shadow: 0 0 0 1px #c6c6c6, 0 2px 10px rgba(0,0,0,.18); isolation: isolate; }
+  /* The page bitmap multiplies onto what sits beneath it, so an item on a
+   * layer below the page shows through the paper and the page's own ink
+   * prints over it, as it will in the saved file. */
+  .stage canvas { display: block; position: relative; mix-blend-mode: multiply; pointer-events: none; }
+  #under, #layer { position: absolute; inset: 0; pointer-events: none; }
   .anno { pointer-events: auto; }
 
   .empty { margin: auto; text-align: center; color: var(--muted); max-width: 440px; width: 100%; }
@@ -832,6 +836,7 @@ window.__pending = null;
       </div>
     </div>
     <div class="stage hidden" id="stage">
+      <div id="under"></div>
       <canvas id="pageCanvas"></canvas>
       <div id="tlayer">
         <div id="tlHots"></div>
@@ -3672,7 +3677,7 @@ function openTextEditor(a, isNew) {
     ll.className = 'lbl';
     ll.textContent = 'Layer';
     bar.appendChild(ll);
-    layerButtons(a, button);
+    layerControls(a, number, button);
     sep();
 
     button(a.lines.length ? 'Restore original' : 'Delete',
@@ -3767,7 +3772,7 @@ function openTextEditor(a, isNew) {
     const layerHow = layerKey(e);
     if (layerHow) {
       e.preventDefault();
-      if (reorderAnno(a, layerHow)) changed();
+      if (reorderAnno(a, layerHow)) { changed(); renderBar(); }
       return;
     }
     if (mod && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
@@ -3851,19 +3856,22 @@ function fitSize(text, maxW, baseSize, styleObj) {
 
 /* Annotation coordinates are stored at zoom 1, so scale them for display.
  * 'edit', 'draw', 'cover' and 'line' items live in unrotated page space, so
- * each goes into #layer inside a wrapper carrying the page rotation; the rest
- * are placed in rotated viewport space directly. Either way a later item in
- * the page's list sits on top of an earlier one, as it does in the saved PDF. */
+ * each goes into its host inside a wrapper carrying the page rotation; the
+ * rest are placed in rotated viewport space directly. Items on a layer below
+ * the page go into #under, beneath the page bitmap; the others into #layer. */
 const annoEls = new WeakMap();
 const IN_TEXT_SPACE = new Set(['edit', 'draw', 'cover', 'line']);
 
 function drawLayer() {
-  const layer = $('layer');
-  layer.textContent = '';
+  const above = $('layer');
+  const under = $('under');
+  above.textContent = '';
+  under.textContent = '';
   const item = state.pages[state.current];
   const z = state.zoom;
 
   stackingOrder(item.annos).forEach((a) => {
+    const layer = layerOf(a) < PAGE_LAYER ? under : above;
     const el = document.createElement('div');
     el.className = 'anno ' + a.kind + (state.activeAnno === a ? ' sel' : '');
     annoEls.set(a, el);
@@ -4031,39 +4039,61 @@ function drawLayer() {
   scheduleCheckpoint();
 }
 
-/* ---------- Stacking order ----------
- * Later items in a page's list sit on top of earlier ones, on screen and in
- * the saved PDF. Covers (the white patches table edits leave over removed
- * text) always go underneath everything the user placed.
+/* ---------- Layers ----------
+ * Every item has a layer number. The page's own content is layer 1, and a
+ * new item starts on layer 1 too, in front of the page. Lower numbers sit
+ * behind the page, where the page's ink prints over the item; higher numbers
+ * sit in front of it. Among items on the same layer, the later one in the
+ * page's list is on top, except covers (the white patches table edits leave
+ * over removed text), which go underneath everything else on their layer.
+ * The saved PDF stacks the same way.
  */
+const PAGE_LAYER = 1;
 const LAYERABLE = new Set(['text', 'rect', 'image', 'edit', 'draw']);
 
+const layerOf = (a) => (Number.isFinite(a.layer) ? a.layer : PAGE_LAYER);
+
+function setLayer(a, n) {
+  n = Math.round(n);
+  if (!Number.isFinite(n) || n === layerOf(a)) return false;
+  a.layer = n;
+  return true;
+}
+
 function stackingOrder(annos) {
-  return [...annos.filter((a) => a.kind === 'cover'), ...annos.filter((a) => a.kind !== 'cover')];
+  const key = (a, i) => [layerOf(a), a.kind === 'cover' ? 0 : 1, i];
+  return annos.map((a, i) => ({ a, k: key(a, i) }))
+    .sort((p, q) => (p.k[0] - q.k[0]) || (p.k[1] - q.k[1]) || (p.k[2] - q.k[2]))
+    .map((e) => e.a);
 }
 
 /**
- * Move an item through the pile: 'forward' or 'backward' steps it past its
- * nearest visible neighbour, 'front' and 'back' take it to the top or bottom.
- * Returns whether anything changed.
+ * Move an item through the layers: 'forward' and 'backward' step its number
+ * by one; 'front' puts it alone above every other item and the page, 'back'
+ * alone beneath them. Returns whether anything changed.
  */
 function reorderAnno(a, how) {
-  const annos = state.pages[state.current].annos;
-  const i = annos.indexOf(a);
-  if (i < 0) return false;
-  let j;
-  if (how === 'front') j = annos.length - 1;
-  else if (how === 'back') j = 0;
-  else {
-    const step = how === 'forward' ? 1 : -1;
-    j = i + step;
-    while (j >= 0 && j < annos.length && !LAYERABLE.has(annos[j].kind)) j += step;
-    if (j < 0 || j >= annos.length) return false;
+  if (how === 'forward') return setLayer(a, layerOf(a) + 1);
+  if (how === 'backward') return setLayer(a, layerOf(a) - 1);
+  const others = state.pages[state.current].annos
+    .filter((x) => x !== a && LAYERABLE.has(x.kind)).map(layerOf);
+  if (how === 'front') {
+    const top = Math.max(PAGE_LAYER, ...others);
+    return layerOf(a) > top ? false : setLayer(a, top + 1);
   }
-  if (j === i) return false;
-  annos.splice(i, 1);
-  annos.splice(j, 0, a);
-  return true;
+  if (how === 'back') {
+    const bottom = Math.min(PAGE_LAYER, ...others);
+    return layerOf(a) < bottom ? false : setLayer(a, bottom - 1);
+  }
+  return false;
+}
+
+const LAYER_TIP = 'Layer number. The page itself is layer 1: a lower number sits behind the page, a higher one in front of it.';
+
+/** The layer field and the four layer buttons, built with a toolbar's own helpers. */
+function layerControls(a, number, button) {
+  number('tb-layer', LAYER_TIP, layerOf(a), { step: '1' }, (v) => setLayer(a, v));
+  layerButtons(a, button);
 }
 
 /** Which way a Ctrl+[ / Ctrl+] press asks to move the item, or null. */
@@ -4724,7 +4754,7 @@ function renderSelBar() {
   }
 
   label('Layer');
-  layerButtons(a, button);
+  layerControls(a, number, button);
   sep();
 
   button('Delete', 'Delete this item (Del)', false, () => removeAnno(a));
@@ -5122,9 +5152,21 @@ async function buildPdf(pageItems) {
     const strippedFlags = stripOriginalText(out, page, editLines.map((l) => l.text));
     const stripped = new Set(editLines.filter((l, i) => strippedFlags[i]));
 
-    // Covers must land before anything that draws on top of them; after that,
-    // list order is stacking order, as on screen.
-    for (const a of stackingOrder(item.annos)) {
+    // Items on a layer below the page are drawn into a content stream that is
+    // then moved in front of the page's own, so the page's ink prints over
+    // them; everything else is appended after it, in stacking order.
+    const ordered = stackingOrder(item.annos);
+    let belowRef = null;
+    if (ordered.some((a) => layerOf(a) < PAGE_LAYER)) {
+      page.getContentStream(false);
+      belowRef = page.contentStreamRef;
+    }
+    for (const a of ordered) {
+      if (belowRef && layerOf(a) >= PAGE_LAYER) {
+        sendStreamToBack(page, belowRef);
+        belowRef = null;
+        page.getContentStream(false);
+      }
       if (a.kind === 'cover') {
         const [px, py] = vp0.convertToPdfPoint(a.x, a.y + a.h);
         page.drawRectangle({ x: px, y: py, width: a.w, height: a.h, color: hexToRgb(a.color) });
@@ -5219,9 +5261,20 @@ async function buildPdf(pageItems) {
         addLinkAnnot(out, page, corners.map(([x, y]) => vp.convertToPdfPoint(...rotatePoint(a, x, y))), a.url);
       }
     }
+    if (belowRef) sendStreamToBack(page, belowRef);
   }
 
   return out.save();
+}
+
+/** Move one of a page's content streams to the front, so the rest paint over it. */
+function sendStreamToBack(page, ref) {
+  const contents = page.node.Contents();
+  if (!(contents instanceof PDFArray)) return;
+  const i = contents.indexOf(ref);
+  if (i === undefined || i === 0) return;
+  contents.remove(i);
+  contents.insert(0, ref);
 }
 
 /** A clickable link to `url` over the bounding box of some points in PDF space. */
