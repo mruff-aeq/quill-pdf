@@ -1353,6 +1353,45 @@ function pageSampler() {
   };
 }
 
+/* The rendered page, kept untouched so the original glyphs under edit boxes
+ * can be erased from the shown bitmap, and come back when a box goes away.
+ * Erasing them in the bitmap, rather than painting white boxes in front of
+ * the page, keeps an item on a layer behind the page showing through the
+ * paper there as it does everywhere else. */
+const pageBitmap = { canvas: null, vp0: null, vpRot: null, key: '' };
+
+function keepPageBitmap(canvas, vp0, vpRot) {
+  const c = pageBitmap.canvas || (pageBitmap.canvas = document.createElement('canvas'));
+  c.width = canvas.width;
+  c.height = canvas.height;
+  c.getContext('2d').drawImage(canvas, 0, 0);
+  pageBitmap.vp0 = vp0;
+  pageBitmap.vpRot = vpRot;
+  pageBitmap.key = '';
+}
+
+/** Blank the original lines of every edit box on the page out of the shown bitmap. */
+function eraseCoveredText() {
+  if (!pageBitmap.canvas || !state.pages.length || !state.canvasCss) return;
+  const rects = [];
+  state.pages[state.current].annos.forEach((a) => {
+    if (a.kind === 'edit') a.lines.forEach((r) => rects.push({ ...coverRect(r), color: a.bg }));
+  });
+  const key = JSON.stringify(rects);
+  if (key === pageBitmap.key) return;
+  pageBitmap.key = key;
+  const ctx = $('pageCanvas').getContext('2d');
+  const { dpr } = state.canvasCss;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(pageBitmap.canvas, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  rects.forEach((r) => {
+    const c = toCanvasRect(r, pageBitmap.vp0, pageBitmap.vpRot);
+    ctx.fillStyle = r.color || '#ffffff';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+  });
+}
+
 async function renderPage() {
   if (!state.pages.length) return;
   closeTextEditor();
@@ -1384,6 +1423,7 @@ async function renderPage() {
   renderCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   await page.render({ canvasContext: renderCtx, viewport: vp }).promise;
   if (token !== renderToken) return;
+  keepPageBitmap(canvas, page.getViewport({ scale: 1, rotation: 0 }), vp);
 
   await buildTextLayer(page, item);
   if (token !== renderToken) return;
@@ -3884,6 +3924,7 @@ function drawLayer() {
   under.textContent = '';
   const item = state.pages[state.current];
   const z = state.zoom;
+  eraseCoveredText();
 
   stackingOrder(item.annos).forEach((a) => {
     const layer = layerOf(a) < PAGE_LAYER ? under : above;
@@ -3923,8 +3964,8 @@ function drawLayer() {
       el.style.opacity = a.opacity;
       if (a.hl) el.classList.add('hl');
     } else if (a.kind === 'edit') {
-      // Cover the original lines with the sampled background, then lay the
-      // text out exactly as the export will.
+      // The original lines are erased from the page bitmap by
+      // eraseCoveredText(); here the text is laid out exactly as the export will.
       const L = layoutEdit(a);
       const H = Math.max(a.h, L.height);
       el.style.width = (a.w * z) + 'px';
@@ -3936,8 +3977,7 @@ function drawLayer() {
           `width:${w * z}px;height:${h * z}px;background:${color}`;
         host.appendChild(d);
       };
-      a.lines.forEach((r) => { const c = coverRect(r); box(c.x - a.x, c.y - a.y, c.w, c.h, a.bg); });
-      // The text turns about the box centre; the covers stay over the original lines.
+      // The text turns about the box centre; the erased lines stay where they were.
       host = document.createElement('div');
       host.className = 'edit-content';
       if (a.rot) host.style.transform = `rotate(${a.rot}deg)`;
