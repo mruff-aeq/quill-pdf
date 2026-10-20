@@ -45,6 +45,7 @@ Snap to text line. Cave not need steady hand.
 
 - Text box. Picture. Drawn signature. Box.
 - Drag to move. Any corner to resize. Handle to rotate.
+- Thing hide behind other thing? Click it. ▲ bring forward. ▼ send back. ⤒ to front. ⤓ to back. Ctrl+] and Ctrl+[ same. Shift for front and back.
 
 ### 📄 Pages
 

@@ -421,8 +421,11 @@ window.__pending = null;
     padding: 1px 6px; border-radius: 3px; white-space: nowrap; pointer-events: none;
   }
 
-  #tlayer { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
-  #tlEdits, #tlHots { position: absolute; inset: 0; pointer-events: none; }
+  /* Unrotated page space. The hotspot layer, the editor layer and each edit
+   * item's wrapper inside #layer all carry the same page-rotation transform,
+   * so items stack purely by their order in #layer. */
+  #tlayer, #tlInput, .tlwrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+  #tlHots { position: absolute; inset: 0; pointer-events: none; }
   #tlHots { display: none; }
   #tlayer.editing #tlHots { display: block; }
   .tline, .tline-input, .tcell, .tbtn { pointer-events: auto; }
@@ -468,7 +471,6 @@ window.__pending = null;
     padding: 0 3px; font-family: Helvetica, Arial, sans-serif; outline: none; box-shadow: 0 6px 22px rgba(0,0,0,.25);
   }
   .anno.edit { overflow: visible; white-space: pre; line-height: 1; cursor: text; }
-  #tlInput { position: absolute; inset: 0; pointer-events: none; }
   .tinplace {
     position: absolute; pointer-events: auto; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent;
     outline: 1px dashed var(--accent); outline-offset: 2px; box-shadow: none; resize: none; overflow: hidden;
@@ -822,11 +824,10 @@ window.__pending = null;
     <div class="stage hidden" id="stage">
       <canvas id="pageCanvas"></canvas>
       <div id="tlayer">
-        <div id="tlEdits"></div>
         <div id="tlHots"></div>
-        <div id="tlInput"></div>
       </div>
       <div id="layer"></div>
+      <div id="tlInput"></div>
     </div>
   </div>
 </div>
@@ -3222,19 +3223,37 @@ function shiftRegionRight(t, fromX, dx, annos) {
 }
 
 /* ---------- Edit-text hotspots ---------- */
-/** Size and rotate the unrotated-space layer so it overlays the rendered page. */
+/** Size and rotate the unrotated-space layers so they overlay the rendered page. */
+let textSpace = { w: 0, h: 0, transform: 'none' };
 function applyTextLayerTransform(page, item) {
   const vp0 = page.getViewport({ scale: state.zoom, rotation: 0 });
-  const tl = $('tlayer');
   const w = vp0.width, h = vp0.height;
-  tl.style.width = w + 'px';
-  tl.style.height = h + 'px';
   const r = ((item.rotation % 360) + 360) % 360;
-  tl.style.transform =
-    r === 90 ? `translateX(${h}px) rotate(90deg)`
-    : r === 180 ? `translate(${w}px, ${h}px) rotate(180deg)`
-    : r === 270 ? `translateY(${w}px) rotate(270deg)`
-    : 'none';
+  textSpace = {
+    w, h,
+    transform: r === 90 ? `translateX(${h}px) rotate(90deg)`
+      : r === 180 ? `translate(${w}px, ${h}px) rotate(180deg)`
+      : r === 270 ? `translateY(${w}px) rotate(270deg)`
+      : 'none',
+  };
+  placeInTextSpace($('tlayer'));
+  placeInTextSpace($('tlInput'));
+}
+
+function placeInTextSpace(el) {
+  el.style.width = textSpace.w + 'px';
+  el.style.height = textSpace.h + 'px';
+  el.style.transform = textSpace.transform;
+  return el;
+}
+
+/** A wrapper that puts one element into unrotated page space inside #layer. */
+function wrapInTextSpace(el) {
+  const w = document.createElement('div');
+  w.className = 'tlwrap';
+  placeInTextSpace(w);
+  w.appendChild(el);
+  return w;
 }
 
 function drawTextHotspots() {
@@ -3638,6 +3657,13 @@ function openTextEditor(a, isNew) {
     button('⟳', 'Rotate 90° clockwise', false, () => { a.rot = normDeg((a.rot || 0) + 90); });
     sep();
 
+    const ll = document.createElement('span');
+    ll.className = 'lbl';
+    ll.textContent = 'Layer';
+    bar.appendChild(ll);
+    layerButtons(a, button);
+    sep();
+
     button(a.lines.length ? 'Restore original' : 'Delete',
       a.lines.length ? 'Put the original text back' : 'Delete this text box', false,
       () => { removeAnno(a); finish(); });
@@ -3727,6 +3753,12 @@ function openTextEditor(a, isNew) {
       renderBar();
       return;
     }
+    const layerHow = layerKey(e);
+    if (layerHow) {
+      e.preventDefault();
+      if (reorderAnno(a, layerHow)) changed();
+      return;
+    }
     if (mod && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
       e.preventDefault();
       if (e.key.toLowerCase() === 'y' || e.shiftKey) redo(); else undo();
@@ -3802,19 +3834,20 @@ function fitSize(text, maxW, baseSize, styleObj) {
 }
 
 /* Annotation coordinates are stored at zoom 1, so scale them for display.
- * 'edit' items live in unrotated page space and go into the CSS-rotated
- * #tlEdits layer; everything else is placed in rotated viewport space. */
+ * 'edit', 'draw', 'cover' and 'line' items live in unrotated page space, so
+ * each goes into #layer inside a wrapper carrying the page rotation; the rest
+ * are placed in rotated viewport space directly. Either way a later item in
+ * the page's list sits on top of an earlier one, as it does in the saved PDF. */
 const annoEls = new WeakMap();
+const IN_TEXT_SPACE = new Set(['edit', 'draw', 'cover', 'line']);
 
 function drawLayer() {
   const layer = $('layer');
-  const edits = $('tlEdits');
   layer.textContent = '';
-  edits.textContent = '';
   const item = state.pages[state.current];
   const z = state.zoom;
 
-  item.annos.forEach((a) => {
+  stackingOrder(item.annos).forEach((a) => {
     const el = document.createElement('div');
     el.className = 'anno ' + a.kind + (state.activeAnno === a ? ' sel' : '');
     annoEls.set(a, el);
@@ -3877,7 +3910,7 @@ function drawLayer() {
         L.lines.forEach((ln) => lineRuns(a, ln, L.size).forEach((r) => {
           if (r.link) box(r.dx, ln.bl + L.size * 0.1, r.w, Math.max(1 / z, L.size * 0.06), LINK_COLOR);
         }));
-        return edits.appendChild(el);
+        return layer.appendChild(wrapInTextSpace(el));
       }
       const s = L.size;
       const asc = cssBaseline(a);
@@ -3977,10 +4010,61 @@ function drawLayer() {
         if (t !== null) { a.text = t; drawLayer(); }
       }
     });
-    (a.kind === 'edit' || a.kind === 'draw' || a.kind === 'cover' || a.kind === 'line'
-      ? edits : layer).appendChild(el);
+    layer.appendChild(IN_TEXT_SPACE.has(a.kind) ? wrapInTextSpace(el) : el);
   });
   scheduleCheckpoint();
+}
+
+/* ---------- Stacking order ----------
+ * Later items in a page's list sit on top of earlier ones, on screen and in
+ * the saved PDF. Covers (the white patches table edits leave over removed
+ * text) always go underneath everything the user placed.
+ */
+const LAYERABLE = new Set(['text', 'rect', 'image', 'edit', 'draw']);
+
+function stackingOrder(annos) {
+  return [...annos.filter((a) => a.kind === 'cover'), ...annos.filter((a) => a.kind !== 'cover')];
+}
+
+/**
+ * Move an item through the pile: 'forward' or 'backward' steps it past its
+ * nearest visible neighbour, 'front' and 'back' take it to the top or bottom.
+ * Returns whether anything changed.
+ */
+function reorderAnno(a, how) {
+  const annos = state.pages[state.current].annos;
+  const i = annos.indexOf(a);
+  if (i < 0) return false;
+  let j;
+  if (how === 'front') j = annos.length - 1;
+  else if (how === 'back') j = 0;
+  else {
+    const step = how === 'forward' ? 1 : -1;
+    j = i + step;
+    while (j >= 0 && j < annos.length && !LAYERABLE.has(annos[j].kind)) j += step;
+    if (j < 0 || j >= annos.length) return false;
+  }
+  if (j === i) return false;
+  annos.splice(i, 1);
+  annos.splice(j, 0, a);
+  return true;
+}
+
+/** Which way a Ctrl+[ / Ctrl+] press asks to move the item, or null. */
+function layerKey(e) {
+  if (!(e.ctrlKey || e.metaKey)) return null;
+  const fwd = e.code === 'BracketRight' || e.key === ']' || e.key === '}';
+  const bwd = e.code === 'BracketLeft' || e.key === '[' || e.key === '{';
+  if (!fwd && !bwd) return null;
+  return fwd ? (e.shiftKey ? 'front' : 'forward') : (e.shiftKey ? 'back' : 'backward');
+}
+
+/** The four layer buttons, built with whichever toolbar's button helper is passed in. */
+function layerButtons(a, button) {
+  button('▲', 'Bring forward (Ctrl+])', false, () => reorderAnno(a, 'forward'));
+  button('▼', 'Send backward (Ctrl+[)', false, () => reorderAnno(a, 'backward'));
+  button('⤒', 'Bring to front (Ctrl+Shift+])', false, () => reorderAnno(a, 'front'));
+  button('⤓', 'Send to back (Ctrl+Shift+[)', false, () => reorderAnno(a, 'back'));
 }
 
 /* ---------- Rotation ----------
@@ -4601,6 +4685,10 @@ function renderSelBar() {
     sep();
   }
 
+  label('Layer');
+  layerButtons(a, button);
+  sep();
+
   button('Delete', 'Delete this item (Del)', false, () => removeAnno(a));
 }
 $('layer').addEventListener('pointerdown', (e) => {
@@ -4996,13 +5084,9 @@ async function buildPdf(pageItems) {
     const strippedFlags = stripOriginalText(out, page, editLines.map((l) => l.text));
     const stripped = new Set(editLines.filter((l, i) => strippedFlags[i]));
 
-    // Covers must land before anything that draws on top of them.
-    const ordered = [
-      ...item.annos.filter((a) => a.kind === 'cover'),
-      ...item.annos.filter((a) => a.kind !== 'cover'),
-    ];
-
-    for (const a of ordered) {
+    // Covers must land before anything that draws on top of them; after that,
+    // list order is stacking order, as on screen.
+    for (const a of stackingOrder(item.annos)) {
       if (a.kind === 'cover') {
         const [px, py] = vp0.convertToPdfPoint(a.x, a.y + a.h);
         page.drawRectangle({ x: px, y: py, width: a.w, height: a.h, color: hexToRgb(a.color) });
@@ -5297,6 +5381,12 @@ document.addEventListener('keydown', (e) => {
     drawLayer();
     drawTextHotspots();
     renderSelBar();
+  }
+  const layerHow = state.activeAnno && layerKey(e);
+  if (layerHow) {
+    e.preventDefault();
+    if (reorderAnno(state.activeAnno, layerHow)) { drawLayer(); drawTextHotspots(); renderSelBar(); }
+    return;
   }
   if (e.key === 'ArrowRight' && state.current < state.pages.length - 1) {
     state.current++; renderThumbs(); renderPage();
