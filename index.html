@@ -537,7 +537,13 @@ window.__pending = null;
     .cpanel, .cpanel:not(.active) { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 6px 10px; min-height: 48px; border: 0; align-items: center; scrollbar-width: none; }
     .cpanel::-webkit-scrollbar { display: none; }
     .cpanel .hint { white-space: nowrap; }
+    /* The strip scrolls sideways as one piece: the tools keep their full
+     * width instead of shrinking under the Exit button, which stays pinned
+     * at the right edge. */
     .et-tools { flex-wrap: nowrap; }
+    .cpanel > .et-tools { flex: 0 0 auto; min-width: max-content; }
+    .et-tools > * { flex: none; }
+    #btnEditDone { position: sticky; right: -10px; flex: none; margin-left: 0; background: #fff; box-shadow: -8px 0 8px #fff; }
     .tb, .et-tools .tb, .et-tools .tb-swatch { height: 34px; min-width: 34px; }
     .et-tools select, .et-tools input[type=number] { height: 34px; }
     .cpanel .spacer { display: none; }
