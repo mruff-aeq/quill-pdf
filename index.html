@@ -2175,9 +2175,24 @@ function blockFromLines(lines, pitch) {
   };
 }
 
-/* Covers reach a little past the original line so no anti-aliased edge of an
- * old glyph peeks out, which shows once the new text is rotated or moved. */
+/* Covers reach a little past the original line: sideways so no anti-aliased
+ * edge of an old glyph peeks out, and above and below because parentheses,
+ * accents and descenders overshoot the line box the text layer reports. Both
+ * show as slivers once the new text is moved or rotated away. A cover stops
+ * short of a neighbouring line above or below, so it never clips that one. */
 const COVER_PAD = 1;
+const COVER_ABOVE = 0.16, COVER_BELOW = 0.12;   // overshoot allowance, in em
+
+function coverRect(r, neighbours = state.lines) {
+  const size = r.h / 1.06;
+  let top = r.y - size * COVER_ABOVE, bottom = r.y + r.h + size * COVER_BELOW;
+  for (const l of neighbours || []) {
+    if (l.x + l.w <= r.x - COVER_PAD || l.x >= r.x + r.w + COVER_PAD) continue;
+    if (l.y + l.h <= r.y + 0.5) top = Math.max(top, Math.min(r.y, l.y + l.h));
+    else if (l.y >= r.y + r.h - 0.5) bottom = Math.min(bottom, Math.max(r.y + r.h, l.y));
+  }
+  return { x: r.x - COVER_PAD, y: top, w: r.w + COVER_PAD * 2, h: bottom - top };
+}
 
 /** Turn a block into an edit box, widened so every original line still fits in the standard font. */
 function editFromBlock(b) {
@@ -2743,7 +2758,7 @@ function refitColumn(t, ci, newW, annos) {
     const cx = l.x + l.w / 2;
     if (cx < col.x || cx >= col.x + col.w || l.x + l.w <= right) continue;
     retire(item, l);
-    annos.push({ kind: 'cover', x: l.x - 1, y: l.y - 1, w: l.w + 2, h: l.h + 2, color: '#ffffff' });
+    annos.push({ kind: 'cover', ...coverRect(l), color: '#ffffff' });
     annos.push({
       kind: 'draw', x: l.x, y: l.y, w: Math.max(10, right - l.x), h: l.h, bl: l.bl,
       text: l.text, size: l.size, family: l.family,
@@ -3921,7 +3936,7 @@ function drawLayer() {
           `width:${w * z}px;height:${h * z}px;background:${color}`;
         host.appendChild(d);
       };
-      a.lines.forEach((r) => box(r.x - a.x - COVER_PAD, r.y - a.y, r.w + COVER_PAD * 2, r.h, a.bg));
+      a.lines.forEach((r) => { const c = coverRect(r); box(c.x - a.x, c.y - a.y, c.w, c.h, a.bg); });
       // The text turns about the box centre; the covers stay over the original lines.
       host = document.createElement('div');
       host.className = 'edit-content';
@@ -5218,7 +5233,12 @@ async function buildPdf(pageItems) {
           const [bx, by] = vp0.convertToPdfPoint(x, y + h);
           page.drawRectangle({ x: bx, y: by, width: w, height: h, color: hexToRgb(color) });
         };
-        a.lines.forEach((r) => { if (!stripped.has(r)) box(r.x - COVER_PAD, r.y, r.w + COVER_PAD * 2, r.h, a.bg); });
+        const neighbours = item === state.pages[state.current] ? state.lines : [];
+        a.lines.forEach((r) => {
+          if (stripped.has(r)) return;
+          const c = coverRect(r, neighbours);
+          box(c.x, c.y, c.w, c.h, a.bg);
+        });
 
         const font = await getFont(a.family, a.bold, a.italic);
         const L = layoutEdit(a);
