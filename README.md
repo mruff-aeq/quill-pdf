@@ -38,6 +38,7 @@ Click **Edit object**. Now anything on page can be grabbed. Text line. Shape. Li
 - Every thing get box around it. Cave see what can grab.
 - Click to pick. Picked thing show tools: ✥ move, round handle rotate, corner resize, red × delete.
 - Drag thing itself also move. ⟲ ⟳ buttons turn 90°. Delete key also remove.
+- Thing hide behind other thing? ▲ ▼ ⤒ ⤓, or Bring to front / Send to back, or Ctrl+] Ctrl+[. Page thing step in front of (or behind) next thing it touch. Added thing change layer number, same as always.
 - Things stacked? Click again. Get thing underneath.
 - Arrow keys nudge. Shift nudge more.
 - Real change inside PDF, not paint on top. Deleted text gone from file.

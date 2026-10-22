@@ -4256,13 +4256,17 @@ function layerTarget() {
   return editor ? editor.a : state.activeAnno;
 }
 
+/** A page object picked in Edit object mode, which the ribbon's layer buttons restack too. */
+const nativeLayerTarget = () => state.objMode && !editor && (() => { const s = currentObjSel(); return s && s.native; })();
+
 function updateLayerButtons() {
-  const off = !layerTarget();
+  const off = !layerTarget() && !nativeLayerTarget();
   $('btnFront').disabled = off;
   $('btnBack').disabled = off;
 }
 
 function layerFromRibbon(how) {
+  if (nativeLayerTarget()) { restackObj(how); return; }
   const a = layerTarget();
   if (!a || !reorderAnno(a, how)) return;
   drawLayer();
@@ -5908,8 +5912,13 @@ function scanContent(src, res) {
   let Tm = MAT_I, Tlm = MAT_I;
   let openPieces = [];
   let path = null;
+  let inText = false;
+  let curIdx = 0;
   const pieces = [];
   const objects = [];
+  // The state before each operator (and after the last): where a
+  // self-contained block may be inserted when an object is restacked.
+  const points = [];
   const raw = (o) => src.slice(o.start, o.end);
 
   const flatten = (p0, p1, p2, p3, out) => {
@@ -5922,7 +5931,7 @@ function scanContent(src, res) {
     }
   };
   const pathOp = (o) => {
-    if (!path) path = { start: o.start, consEnd: o.end, subs: [], cur: [0, 0], ctm: g.ctm };
+    if (!path) path = { start: o.start, i0: curIdx, consEnd: o.end, subs: [], cur: [0, 0], ctm: g.ctm };
     path.consEnd = o.end;
     return path;
   };
@@ -5931,6 +5940,8 @@ function scanContent(src, res) {
   ops.forEach((o, idx) => {
     const a = o.args;
     const num = (k) => (typeof a[k] === 'number' ? a[k] : 0);
+    curIdx = idx;
+    points.push({ inText, inPath: !!path, clips: g.clips, ctm: g.ctm });
     switch (o.op) {
       case 'q': stack.push(cloneGState(g)); break;
       case 'Q': if (stack.length) g = stack.pop(); break;
@@ -5951,8 +5962,8 @@ function scanContent(src, res) {
       case 'Ts': g.Ts = num(0); break;
       case 'Tr': g.Tr = num(0); break;
       case 'Tf': g.font = a[0] && a[0].name; g.fontRaw = a[0] && a[0].raw; g.size = num(1); break;
-      case 'BT': Tm = Tlm = MAT_I; openPieces = []; break;
-      case 'ET': openPieces.forEach((p) => { p.etEnd = o.end; }); openPieces = []; break;
+      case 'BT': inText = true; Tm = Tlm = MAT_I; openPieces = []; break;
+      case 'ET': inText = false; openPieces.forEach((p) => { p.etEnd = o.end; }); openPieces = []; break;
       case 'TD': g.TL = -num(1); // falls through
       case 'Td': Tlm = matMul([1, 0, 0, 1, num(0), num(1)], Tlm); Tm = Tlm; break;
       case 'Tm': Tlm = Tm = [num(0), num(1), num(2), num(3), num(4), num(5)]; break;
@@ -6053,12 +6064,12 @@ function scanContent(src, res) {
           const lw = stroke ? Math.max(g.lw * scale, 0.1) : 0;
           const b = quadBox(pts);
           objects.push({
-            kind: 'path', order: idx, start: p.start, end: o.end, paintOp: o, clipOp: p.clipOp || null,
+            kind: 'path', order: idx, i0: p.i0, i1: idx, start: p.start, end: o.end, paintOp: o, clipOp: p.clipOp || null,
             consText, stroke, fill, lw, subs: p.subs, g: cloneGState(g),
             box: { x0: b.x0 - lw / 2, y0: b.y0 - lw / 2, x1: b.x1 + lw / 2, y1: b.y1 + lw / 2 },
           });
         }
-        if (p.clip) g.clips.push({ text: consText, rule: p.clip, ctm: p.ctm, box: quadBox(pts) });
+        if (p.clip) g.clips = g.clips.concat({ text: consText, rule: p.clip, ctm: p.ctm, box: quadBox(pts) });
         break;
       }
       case 'Do': {
@@ -6068,12 +6079,12 @@ function scanContent(src, res) {
         const m = xo.subtype === 'Form' ? matMul(xo.matrix, g.ctm) : g.ctm;
         const bb = xo.subtype === 'Form' ? xo.bbox : [0, 0, 1, 1];
         const quad = [[bb[0], bb[1]], [bb[2], bb[1]], [bb[2], bb[3]], [bb[0], bb[3]]].map(([x, y]) => matApply(m, x, y));
-        objects.push({ kind: xo.subtype === 'Image' ? 'image' : 'form', order: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
+        objects.push({ kind: xo.subtype === 'Image' ? 'image' : 'form', order: idx, i0: idx, i1: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
         break;
       }
       case 'BI': {
         const quad = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([x, y]) => matApply(g.ctm, x, y));
-        objects.push({ kind: 'image', inline: true, order: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
+        objects.push({ kind: 'image', inline: true, order: idx, i0: idx, i1: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
         break;
       }
       default: break;
@@ -6087,6 +6098,7 @@ function scanContent(src, res) {
     if (group && group.pieces.some((p) => p.ink) && group.pieces.every((p) => p.etEnd != null && p.g.fontRaw)) {
       objects.push({
         kind: 'text', order: group.pieces[0].idx, pieces: group.pieces,
+        i0: Math.min(...group.pieces.map((p) => p.idx)), i1: Math.max(...group.pieces.map((p) => p.idx)),
         box: group.pieces.map((p) => quadBox(p.quad)).reduce(boxUnion), g: group.pieces[0].g,
       });
     }
@@ -6117,7 +6129,8 @@ function scanContent(src, res) {
   flush();
 
   objects.sort((p, q) => p.order - q.order);
-  return { objects, endDepth: stack.length };
+  points.push({ inText, inPath: !!path, clips: g.clips, ctm: g.ctm });
+  return { objects, endDepth: stack.length, points, opStart: ops.map((o) => o.start), srcLength: src.length };
 }
 
 /* ----- Rewriting ----- */
@@ -6165,6 +6178,46 @@ function textOpWithout(info, removed) {
   return tj;
 }
 
+const boxOverlap = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+
+/**
+ * Where to draw `obj` again to restack it among the page's objects:
+ * 'forward' goes just in front of the next object above it that it
+ * overlaps, 'backward' just behind the one below it, 'front' after
+ * everything and 'back' before every object that counts (`visible`, in
+ * drawing order). Returns an operator index to insert before, 'end', or
+ * null when nothing it overlaps is in the way. A block may only go where no
+ * text block or half-built path is open and where the clip then in force
+ * leaves the whole object showing.
+ */
+function restackPlace(scan, obj, how, visible) {
+  const others = visible.filter((o) => o !== obj);
+  const hits = (o) => boxOverlap(o.box, obj.box) > 0.01;
+  const ok = (k) => {
+    const p = scan.points[k];
+    if (!p || p.inText || p.inPath) return false;
+    const cb = clipBoxOf(p);
+    return !cb || boxInside(obj.box, cb);
+  };
+  const last = scan.points.length - 1;
+  const forwardFrom = (k) => { for (; k <= last; k++) if (ok(k)) return k === last ? 'end' : k; return 'end'; };
+  const backwardFrom = (k) => { for (; k >= 0; k--) if (ok(k)) return k; return 0; };
+  if (how === 'front') return others.some((o) => o.i0 > obj.i1 && hits(o)) ? 'end' : null;
+  if (how === 'back') {
+    if (!others.some((o) => o.i1 < obj.i0 && hits(o))) return null;
+    return backwardFrom(Math.min(...others.map((o) => o.i0)));
+  }
+  if (how === 'forward') {
+    const t = others.filter((o) => o.i0 > obj.i1 && hits(o)).sort((p, q) => p.i0 - q.i0)[0];
+    return t ? forwardFrom(t.i1 + 1) : null;
+  }
+  if (how === 'backward') {
+    const t = others.filter((o) => o.i1 < obj.i0 && hits(o)).sort((p, q) => q.i1 - p.i1)[0];
+    return t ? backwardFrom(t.i0) : null;
+  }
+  return null;
+}
+
 const boxInside = (b, c, tol = 0.75) => b.x0 >= c.x0 - tol && b.y0 >= c.y0 - tol && b.x1 <= c.x1 + tol && b.y1 <= c.y1 + tol;
 const moveBox = (b, M) => quadBox(boxQuad(b).map(([x, y]) => matApply(M, x, y)));
 
@@ -6190,7 +6243,28 @@ function rewriteContent(src, scan, edits) {
     return lines.join('\n');
   };
 
-  for (const { obj, del, M } of edits) {
+  for (const { obj, del, M, place } of edits) {
+    if (place !== undefined && place !== null) {
+      // Restack: take it out of its place and draw it, self-contained, elsewhere.
+      if (obj.kind === 'text') {
+        for (const p of obj.pieces) {
+          if (!removedText.has(p.info)) removedText.set(p.info, new Set());
+          removedText.get(p.info).add(p);
+        }
+      } else if (obj.kind === 'path' && obj.clipOp) {
+        splice(obj.paintOp.opStart, obj.paintOp.end, 'n');
+      } else {
+        splice(obj.start, obj.end, '');
+      }
+      const block = relocated(obj, MAT_I);
+      if (place === 'end') tail.push(block);
+      else {
+        const at = place < scan.opStart.length ? scan.opStart[place] : scan.srcLength;
+        const back = matInv(scan.points[place].ctm) || MAT_I;
+        splice(at, at, `\nq ${matStr(back)} cm\n${block}\nQ\n`);
+      }
+      continue;
+    }
     const C = obj.g.ctm;
     const Cinv = matInv(C);
     const A = !del && Cinv ? matMul(matMul(C, M), Cinv) : null;
@@ -6562,6 +6636,7 @@ function updateObjBar() {
   tools.textContent = '';
   const sel = state.objMode ? currentObjSel() : null;
   $('objHint').classList.toggle('hidden', !!sel);
+  updateLayerButtons();
   if (!sel) return;
   const label = document.createElement('span');
   label.className = 'lbl';
@@ -6580,6 +6655,23 @@ function updateObjBar() {
   };
   button('objRotL', '⟲', 'Rotate 90° anticlockwise', () => rotateObjBy(-90), !canRotate(sel));
   button('objRotR', '⟳', 'Rotate 90° clockwise', () => rotateObjBy(90), !canRotate(sel));
+  const sep = document.createElement('span');
+  sep.className = 'tb-sep';
+  tools.appendChild(sep);
+  if (sel.anno) {
+    const lv = document.createElement('span');
+    lv.className = 'lbl';
+    lv.textContent = 'Layer ' + layerOf(sel.anno);
+    lv.title = LAYER_TIP;
+    tools.appendChild(lv);
+  }
+  button('objFwd', '▲', 'Bring forward (Ctrl+])', () => restackObj('forward'));
+  button('objBwd', '▼', 'Send backward (Ctrl+[)', () => restackObj('backward'));
+  button('objTop', '⤒', 'Bring to front (Ctrl+Shift+])', () => restackObj('front'));
+  button('objBottom', '⤓', 'Send to back (Ctrl+Shift+[)', () => restackObj('back'));
+  const sep2 = document.createElement('span');
+  sep2.className = 'tb-sep';
+  tools.appendChild(sep2);
   button('objDelete', '<svg class="ic"><use href="#i-trash"/></svg> Delete', 'Delete the selected object (Del)', () => deleteObjSel());
 }
 
@@ -6816,7 +6908,7 @@ async function commitObjectEdit(o, edit, ghost) {
   updateObjBar();
   const item = state.pages[state.current];
   const src = state.sources.get(item.srcId);
-  setStatus(edit.del ? 'Deleting…' : 'Moving…');
+  setStatus(edit.del ? 'Deleting…' : edit.how ? { front: 'Bringing to front…', back: 'Sending to back…', forward: 'Bringing forward…', backward: 'Sending backward…' }[edit.how] : 'Moving…');
   try {
     const next = rewriteContent(objState.text, objState.scan, [{ obj: o, ...edit }]);
     const out = await PDFDocument.create();
@@ -6830,7 +6922,7 @@ async function commitObjectEdit(o, edit, ghost) {
     item.srcId = id;
     item.srcIndex = 0;
     objState.sel = null;
-    objState.want = edit.del ? null : { kind: o.kind, box: quadBox(objPoints(o).map(([x, y]) => matApply(edit.M, x, y))) };
+    objState.want = edit.del ? null : { kind: o.kind, box: quadBox(objPoints(o).map(([x, y]) => matApply(edit.M || MAT_I, x, y))) };
     await renderPage();
     renderThumbs();
   } catch (err) {
@@ -6923,6 +7015,27 @@ function nudgeObj(dx, dy) {
   }, 350);
 }
 
+/**
+ * Bring forward / send backward / to front / to back. Added items change
+ * their layer number; the page's own objects move within the page's drawing
+ * order, past the things they overlap.
+ */
+function restackObj(how) {
+  const sel = currentObjSel();
+  if (!sel || objState.busy) return;
+  if (sel.anno) {
+    if (reorderAnno(sel.anno, how)) { drawLayer(); drawTextHotspots(); renderSelBar(); }
+    return;
+  }
+  const place = restackPlace(objState.scan, sel.native, how, objState.list);
+  if (place === null) {
+    setStatus(how === 'front' || how === 'forward'
+      ? 'Already in front of everything it overlaps.' : 'Already behind everything it overlaps.');
+    return;
+  }
+  commitObjectEdit(sel.native, { place, how });
+}
+
 /** Keys while picking objects; true when the key was used. */
 function objKeydown(e) {
   if (!state.objMode) return false;
@@ -6933,6 +7046,12 @@ function objKeydown(e) {
     return true;
   }
   if (!sel || objState.busy) return false;
+  const how = layerKey(e);
+  if (how) {
+    e.preventDefault();
+    restackObj(how);
+    return true;
+  }
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     deleteObjSel();
