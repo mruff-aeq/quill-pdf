@@ -35,7 +35,9 @@ Click **Edit text**. Click any line. Type. Done.
 
 Click **Edit object**. Now anything on page can be grabbed. Text line. Shape. Line. Picture. Even thing hiding behind page.
 
-- Click to pick. Drag to move. Grab corner to resize. Delete key, or Delete button, to remove.
+- Every thing get box around it. Cave see what can grab.
+- Click to pick. Picked thing show tools: ✥ move, round handle rotate, corner resize, red × delete.
+- Drag thing itself also move. ⟲ ⟳ buttons turn 90°. Delete key also remove.
 - Things stacked? Click again. Get thing underneath.
 - Arrow keys nudge. Shift nudge more.
 - Real change inside PDF, not paint on top. Deleted text gone from file.

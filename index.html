@@ -230,7 +230,22 @@ window.__pending = null;
   .obj-hover, .obj-sel, .obj-ghost { position: absolute; box-sizing: border-box; transform-origin: 50% 50%; pointer-events: none; }
   .obj-hover { outline: 1px dashed rgba(43,87,154,.9); outline-offset: 1px; }
   .obj-sel { outline: 1.5px solid var(--accent); outline-offset: 1px; pointer-events: auto; touch-action: none; cursor: move; }
-  .obj-sel .handle { display: block; }
+  .obj-sel .handle, .obj-sel .rot-handle { display: block; pointer-events: auto; touch-action: none; }
+  .obj-sel .move-handle { left: -28px; top: -4px; }
+  #objBoxes { position: absolute; inset: 0; pointer-events: none; }
+  .obj-box { position: absolute; box-sizing: border-box; transform-origin: 50% 50%; border: 1px solid rgba(43,87,154,.38); border-radius: 1px; }
+  .obj-box.k-text { background: rgba(43,87,154,.07); }
+  .obj-box.k-item { border-style: dashed; }
+  .obj-box.k-path { border-color: rgba(43,87,154,.22); }
+  .obj-hover { background: rgba(43,87,154,.16); }
+  .obj-del {
+    position: absolute; right: -28px; top: -4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+    background: #c42b1c; color: #fff; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; pointer-events: auto; touch-action: none; box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  }
+  .obj-del:hover { background: #a4262c; }
+  .obj-sel.tight-r .obj-del { right: -4px; top: -30px; }
+  .obj-sel.tight-l .move-handle { left: -4px; top: -30px; }
   .obj-ghost { opacity: .85; outline: 1px dashed var(--accent); }
   .et-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
   .et-tools .tb, .tb {
@@ -555,6 +570,13 @@ window.__pending = null;
     .et-tools { flex-wrap: nowrap; }
     .cpanel > .et-tools { flex: 0 0 auto; min-width: max-content; }
     .et-tools > * { flex: none; }
+    /* finger-sized object icons */
+    .obj-sel .move-handle { width: 28px; height: 28px; line-height: 28px; font-size: 17px; left: -36px; top: -8px; }
+    .obj-del { width: 28px; height: 28px; right: -36px; top: -8px; }
+    .obj-sel .rot-handle { width: 20px; height: 20px; margin-left: -10px; top: -36px; }
+    .obj-sel .rot-handle::after { top: 18px; height: 16px; }
+    .obj-sel.tight-r .obj-del { right: -6px; top: -40px; }
+    .obj-sel.tight-l .move-handle { left: -6px; top: -40px; }
     #btnEditDone, #btnObjDone { position: sticky; right: -10px; flex: none; margin-left: 0; background: #fff; box-shadow: -8px 0 8px #fff; }
     .tb, .et-tools .tb, .et-tools .tb-swatch { height: 34px; min-width: 34px; }
     .et-tools select, .et-tools input[type=number] { height: 34px; }
@@ -812,7 +834,7 @@ window.__pending = null;
     <div class="et-tools" id="selTools"></div>
   </div>
   <div class="cpanel hidden" id="objBar">
-    <span class="hint" id="objHint">Click anything on the page to select it. Drag to move, drag a corner to resize, Delete to remove. Click it again for what lies underneath.</span>
+    <span class="hint" id="objHint">Every object has a box. Click one to select it, then drag it or ✥ to move, the round handle to rotate, a corner to resize, × to delete. Click again for what lies underneath.</span>
     <div class="et-tools" id="objTools"></div>
     <span class="spacer"></span>
     <button class="tb" id="btnObjDone">Exit object mode</button>
@@ -4159,7 +4181,7 @@ function drawLayer() {
     });
     layer.appendChild(IN_TEXT_SPACE.has(a.kind) ? wrapInTextSpace(el) : el);
   });
-  if (state.objMode) drawObjFrame();
+  if (state.objMode) { drawObjBoxes(); drawObjFrame(); }
   scheduleCheckpoint();
 }
 
@@ -6292,6 +6314,7 @@ async function refreshObjects() {
   objState.list = objState.scan.objects.filter((o) => {
     o.vr = viewRect(o.box, vp1);
     o.ur = viewRect(o.box, vp0);
+    o.frame = nativeFrame(o, vp1);
     // The plain white sheet some writers paint first is the paper, not an object.
     if (o.kind === 'path' && o.fill && !o.stroke && o.vr.w * o.vr.h > pageArea * 0.9 && WHITE_FILL.test((o.g.fill || '').trim())) return false;
     // Text already taken over by an edit box is edited there.
@@ -6312,6 +6335,7 @@ async function refreshObjects() {
     }
     if (best) objState.sel = { native: best };
   }
+  drawObjBoxes();
   drawObjFrame();
 }
 
@@ -6407,9 +6431,41 @@ function selectObj(t) {
   drawObjFrame();
 }
 
+/** An object's frame in the rotated page view at zoom 1: { x, y, w, h, rot }, turned about its centre. */
 function objFrameOf(t) {
-  if (t.native) return { ...t.native.vr, rot: 0 };
+  if (t.native) return t.native.frame || { ...t.native.vr, rot: 0 };
   return annoFrame(t.anno);
+}
+
+/** The smallest box turned by `ang` (radians) holding every point. */
+function orientedFrame(pts, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const [x, y] of pts) {
+    const u = x * c + y * s, v = -x * s + y * c;
+    u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+  }
+  const uc = (u0 + u1) / 2, vc = (v0 + v1) / 2;
+  const w = u1 - u0, h = v1 - v0;
+  let rot = ang * 180 / Math.PI;
+  if (Math.abs(rot) < 0.05) rot = 0;
+  return { x: uc * c - vc * s - w / 2, y: uc * s + vc * c - h / 2, w, h, rot };
+}
+
+/**
+ * Text, images and graphics get a frame along their own axes, so a turned
+ * line of text gets a turned box; a shape's frame is its upright bounds.
+ */
+function nativeFrame(o, vp) {
+  const view = (pts) => pts.map(([x, y]) => vp.convertToViewportPoint(x, y));
+  let quads = null;
+  if (o.kind === 'text') quads = o.pieces.map((p) => view(p.quad));
+  else if (o.quad) quads = [view(o.quad)];
+  if (!quads) return { ...o.vr, rot: 0 };
+  const [p0, p1] = quads[0];
+  const len = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+  const ang = len > 0.01 ? Math.atan2(p1[1] - p0[1], p1[0] - p0[0]) : 0;
+  return orientedFrame(quads.flat(), ang);
 }
 
 function placeBox(el, f, z = state.zoom) {
@@ -6419,6 +6475,32 @@ function placeBox(el, f, z = state.zoom) {
   el.style.height = Math.max(2, f.h * z) + 'px';
   el.style.transform = f.rot ? `rotate(${f.rot}deg)` : '';
 }
+
+/** A light box around every object on the page, like the text boxes of Edit text. */
+function drawObjBoxes() {
+  const host = $('objLayer');
+  let boxes = $('objBoxes');
+  if (!boxes) {
+    boxes = document.createElement('div');
+    boxes.id = 'objBoxes';
+    host.prepend(boxes);
+  }
+  boxes.textContent = '';
+  if (!state.objMode || !objState.views || !state.pages.length) return;
+  const frag = document.createDocumentFragment();
+  const add = (f, cls) => {
+    const b = document.createElement('div');
+    b.className = 'obj-box ' + cls;
+    placeBox(b, f);
+    frag.appendChild(b);
+  };
+  objState.list.forEach((o) => add(objFrameOf({ native: o }), 'k-' + o.kind));
+  state.pages[state.current].annos.filter((a) => LAYERABLE.has(a.kind)).forEach((a) => add(annoFrame(a), 'k-item'));
+  boxes.appendChild(frag);
+}
+
+const OBJ_ROTATABLE = new Set([...ROTATABLE, 'edit']);
+const canRotate = (t) => !!t && (t.native ? true : OBJ_ROTATABLE.has(t.anno.kind));
 
 function drawObjFrame() {
   const host = $('objLayer');
@@ -6432,19 +6514,46 @@ function drawObjFrame() {
     placeBox(h, objFrameOf(objState.hover));
     host.appendChild(h);
   }
-  if (sel) {
-    const f = document.createElement('div');
-    f.className = 'obj-sel';
-    placeBox(f, objFrameOf(sel));
-    CORNERS.forEach((corner) => {
-      const h = document.createElement('div');
-      h.className = 'handle ' + corner;
-      h.title = 'Drag to resize';
-      h.addEventListener('pointerdown', (e) => startObjResize(e, currentObjSel(), corner));
-      f.appendChild(h);
-    });
-    host.appendChild(f);
+  if (!sel) return;
+  const f = document.createElement('div');
+  f.className = 'obj-sel';
+  const fr = objFrameOf(sel);
+  placeBox(f, fr);
+  // Near the page edge the side icons sit above the corners instead of off the page.
+  if (!fr.rot) {
+    const room = 40 / state.zoom;
+    if (fr.x + fr.w + room > objState.views.vp1.width) f.classList.add('tight-r');
+    if (fr.x - room < 0) f.classList.add('tight-l');
   }
+  CORNERS.forEach((corner) => {
+    const h = document.createElement('div');
+    h.className = 'handle ' + corner;
+    h.title = 'Drag to resize';
+    h.addEventListener('pointerdown', (e) => startObjResize(e, currentObjSel(), corner));
+    f.appendChild(h);
+  });
+  const grip = document.createElement('div');
+  grip.className = 'move-handle';
+  grip.title = 'Drag to move';
+  grip.textContent = '✥';
+  grip.addEventListener('pointerdown', (e) => startObjMove(e, currentObjSel()));
+  f.appendChild(grip);
+  if (canRotate(sel)) {
+    const rh = document.createElement('div');
+    rh.className = 'rot-handle';
+    rh.title = 'Drag to rotate (hold Shift for 15° steps)';
+    rh.addEventListener('pointerdown', (e) => startObjRotate(e, currentObjSel()));
+    f.appendChild(rh);
+  }
+  const del = document.createElement('button');
+  del.className = 'obj-del';
+  del.title = 'Delete (Del)';
+  del.setAttribute('aria-label', 'Delete');
+  del.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+  del.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+  del.addEventListener('click', (e) => { e.stopPropagation(); deleteObjSel(); });
+  f.appendChild(del);
+  host.appendChild(f);
 }
 
 function updateObjBar() {
@@ -6458,19 +6567,25 @@ function updateObjBar() {
   label.className = 'lbl';
   label.textContent = sel.native ? OBJ_KIND_LABEL[sel.native.kind] : (ANNO_KIND_LABEL[sel.anno.kind] || 'Item');
   tools.appendChild(label);
-  const del = document.createElement('button');
-  del.className = 'tb';
-  del.id = 'objDelete';
-  del.innerHTML = '<svg class="ic"><use href="#i-trash"/></svg> Delete';
-  del.title = 'Delete the selected object (Del)';
-  del.disabled = objState.busy;
-  del.onclick = () => deleteObjSel();
-  tools.appendChild(del);
+  const button = (id, html, title, fn, disabled) => {
+    const b = document.createElement('button');
+    b.className = 'tb';
+    b.id = id;
+    b.innerHTML = html;
+    b.title = title;
+    b.disabled = objState.busy || !!disabled;
+    b.onclick = fn;
+    tools.appendChild(b);
+    return b;
+  };
+  button('objRotL', '⟲', 'Rotate 90° anticlockwise', () => rotateObjBy(-90), !canRotate(sel));
+  button('objRotR', '⟳', 'Rotate 90° clockwise', () => rotateObjBy(90), !canRotate(sel));
+  button('objDelete', '<svg class="ic"><use href="#i-trash"/></svg> Delete', 'Delete the selected object (Del)', () => deleteObjSel());
 }
 
 function deleteObjSel() {
   const sel = currentObjSel();
-  if (!sel) return;
+  if (!sel || objState.busy) return;
   if (sel.native) { commitObjectEdit(sel.native, { del: true }); return; }
   removeAnno(sel.anno);
   drawLayer();
@@ -6485,7 +6600,14 @@ function viewToUser(Mv) {
   return matMul(matMul(V, Mv), matInv(V));
 }
 
-/** A snapshot of the object's patch of page, to drag around until the page is redrawn. */
+const rotMat = (deg) => {
+  const t = deg * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  return [c, s, -s, c, 0, 0];   // clockwise on screen, where y points down
+};
+/** Turn by `deg` about (cx, cy), in view space. */
+const rotateAbout = (deg, cx, cy) => matMul(matMul([1, 0, 0, 1, -cx, -cy], rotMat(deg)), [1, 0, 0, 1, cx, cy]);
+
+/** A snapshot of the object's patch of page, to show the change until the page is redrawn. */
 function objGhost(o) {
   const z = state.zoom, r = o.vr;
   const real = $('pageCanvas');
@@ -6497,9 +6619,34 @@ function objGhost(o) {
   try {
     c.getContext('2d').drawImage(real, r.x * z * dpr, r.y * z * dpr, r.w * z * dpr, r.h * z * dpr, 0, 0, c.width, c.height);
   } catch { /* an empty frame is still a fine preview */ }
-  placeBox(c, r);
+  placeBox(c, { ...r, rot: 0 });
   $('objLayer').appendChild(c);
   return c;
+}
+
+/** Show the ghost (and the frame) with the view-space change Mv applied. */
+function previewObj(ghost, o, Mv) {
+  const z = state.zoom;
+  ghost.style.transformOrigin = `${-o.vr.x * z}px ${-o.vr.y * z}px`;
+  ghost.style.transform = `matrix(${Mv[0]}, ${Mv[1]}, ${Mv[2]}, ${Mv[3]}, ${Mv[4] * z}, ${Mv[5] * z})`;
+  const frame = $('objLayer').querySelector('.obj-sel');
+  if (frame) placeBox(frame, movedFrame(objFrameOf({ native: o }), Mv));
+}
+
+/** The four corners of a frame, in view space: top-left, top-right, bottom-right, bottom-left. */
+function frameCorners(f) {
+  const t = f.rot * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([kx, ky]) => {
+    const lx = kx * f.w / 2, ly = ky * f.h / 2;
+    return [cx + lx * c - ly * s, cy + lx * s + ly * c];
+  });
+}
+
+/** Where a frame lands once the view-space change Mv is applied. */
+function movedFrame(f, Mv) {
+  const pts = frameCorners(f).map(([x, y]) => matApply(Mv, x, y));
+  return orientedFrame(pts, Math.atan2(pts[1][1] - pts[0][1], pts[1][0] - pts[0][0]));
 }
 
 /** Follow one pointer; a cancelled touch (the browser took it to scroll) changes nothing. */
@@ -6515,24 +6662,35 @@ function trackObjPointer(e, onMove, onEnd) {
     window.removeEventListener('pointercancel', finish);
     gestureEndedAt = performance.now();
     gestureActive = false;
-    onEnd(ev.type === 'pointercancel');
+    onEnd(ev.type === 'pointercancel', ev);
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', finish);
   window.addEventListener('pointercancel', finish);
 }
 
+/** Keep the frame on an added item while one of its own gestures runs. */
+function followAnnoGesture() {
+  const follow = () => { drawObjFrame(); drawObjBoxes(); };
+  const done = () => {
+    window.removeEventListener('pointermove', follow);
+    window.removeEventListener('pointerup', done);
+    window.removeEventListener('pointercancel', done);
+    setTimeout(follow, 0);
+  };
+  window.addEventListener('pointermove', follow);
+  window.addEventListener('pointerup', done);
+  window.addEventListener('pointercancel', done);
+}
+
 function startNativeDrag(e, o, onClick) {
   const z = state.zoom;
-  let moved = false, ghost = null, ddx = 0, ddy = 0;
+  let moved = false, ghost = null, Mv = null;
   trackObjPointer(e, (dx, dy) => {
     if (!moved && Math.hypot(dx, dy) < 4) return;
     if (!moved) { moved = true; ghost = objGhost(o); }
-    ddx = dx; ddy = dy;
-    ghost.style.left = (o.vr.x * z + dx) + 'px';
-    ghost.style.top = (o.vr.y * z + dy) + 'px';
-    const f = $('objLayer').querySelector('.obj-sel');
-    if (f) f.style.transform = `translate(${dx}px, ${dy}px)`;
+    Mv = [1, 0, 0, 1, dx / z, dy / z];
+    previewObj(ghost, o, Mv);
   }, (cancelled) => {
     if (!moved || cancelled) {
       if (ghost) ghost.remove();
@@ -6540,54 +6698,115 @@ function startNativeDrag(e, o, onClick) {
       if (!moved && !cancelled && onClick) onClick();
       return;
     }
-    commitObjectEdit(o, { M: viewToUser([1, 0, 0, 1, ddx / z, ddy / z]) }, ghost);
+    commitObjectEdit(o, { M: viewToUser(Mv) }, ghost);
   });
 }
 
-function startObjResize(e, sel, corner) {
-  if (!sel || e.button !== 0) return;
+/** The ✥ grip: move whatever is selected. */
+function startObjMove(e, sel) {
+  if (!sel || e.button !== 0 || objState.busy) return;
   e.preventDefault();
   e.stopPropagation();
-  if (sel.anno) {
-    startResize(e, sel.anno, corner);
-    const follow = () => drawObjFrame();
-    const done = () => {
-      window.removeEventListener('pointermove', follow);
-      window.removeEventListener('pointerup', done);
-      window.removeEventListener('pointercancel', done);
-      drawObjFrame();
-    };
-    window.addEventListener('pointermove', follow);
-    window.addEventListener('pointerup', done);
-    window.addEventListener('pointercancel', done);
-    return;
-  }
-  const o = sel.native, r = o.vr, z = state.zoom;
-  const ax = corner.includes('w') ? r.x + r.w : r.x;
-  const ay = corner.includes('n') ? r.y + r.h : r.y;
-  const uniform = o.kind !== 'path';
-  let sx = 1, sy = 1, ghost = null;
-  trackObjPointer(e, (dx, dy) => {
+  if (sel.native) { startNativeDrag(e, sel.native); return; }
+  startDrag(e, sel.anno);
+  followAnnoGesture();
+}
+
+/** The round handle: turn the selection about its centre. */
+function startObjRotate(e, sel) {
+  if (!sel || e.button !== 0 || objState.busy) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (sel.anno) { startRotate(e, sel.anno); followAnnoGesture(); return; }
+  const o = sel.native, f = objFrameOf(sel), z = state.zoom;
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  const stage = $('stage').getBoundingClientRect();
+  const angleAt = (x, y) => Math.atan2(y - (stage.top + cy * z), x - (stage.left + cx * z)) * 180 / Math.PI;
+  const start = angleAt(e.clientX, e.clientY);
+  let ghost = null, delta = 0;
+  const badge = document.createElement('div');
+  badge.className = 'rot-badge';
+  trackObjPointer(e, (dx, dy, ev) => {
     if (!ghost) ghost = objGhost(o);
-    const w = Math.max(2, r.w + (corner.includes('e') ? dx : -dx) / z);
-    const h = Math.max(2, r.h + (corner.includes('s') ? dy : -dy) / z);
-    sx = r.w > 0.5 ? w / r.w : 1;
-    sy = r.h > 0.5 ? h / r.h : 1;
-    if (uniform) { const s = Math.abs(sx - 1) >= Math.abs(sy - 1) ? sx : sy; sx = sy = s; }
-    const nw = r.w * sx, nh = r.h * sy;
-    const f = { x: corner.includes('w') ? ax - nw : ax, y: corner.includes('n') ? ay - nh : ay, w: nw, h: nh };
-    placeBox(ghost, f);
+    let deg = f.rot + angleAt(ev.clientX, ev.clientY) - start;
+    deg = ev.shiftKey ? Math.round(deg / 15) * 15
+      : Math.abs(deg - Math.round(deg / 90) * 90) < 3 ? Math.round(deg / 90) * 90 : Math.round(deg);
+    delta = deg - f.rot;
+    previewObj(ghost, o, rotateAbout(delta, cx, cy));
     const frame = $('objLayer').querySelector('.obj-sel');
-    if (frame) placeBox(frame, f);
+    if (frame) {
+      badge.textContent = Math.round(normDeg(deg)) + '°';
+      if (badge.parentNode !== frame) frame.appendChild(badge);
+    }
   }, (cancelled) => {
-    if (cancelled || !ghost || (Math.abs(sx - 1) < 0.005 && Math.abs(sy - 1) < 0.005)) {
+    if (cancelled || !ghost || Math.abs(delta) < 0.1) {
       if (ghost) ghost.remove();
       drawObjFrame();
       return;
     }
-    const Mv = matMul(matMul([1, 0, 0, 1, -ax, -ay], [sx, 0, 0, sy, 0, 0]), [1, 0, 0, 1, ax, ay]);
+    commitObjectEdit(o, { M: viewToUser(rotateAbout(delta, cx, cy)) }, ghost);
+  });
+}
+
+/** The ⟲ ⟳ buttons. */
+function rotateObjBy(deg) {
+  const sel = currentObjSel();
+  if (!canRotate(sel) || objState.busy) return;
+  if (sel.anno) {
+    const a = sel.anno;
+    if (a.kind === 'edit') a.rot = normDeg((a.rot || 0) + deg);
+    else { a.rot = normDeg((a.rot || 0) + deg); }
+    drawLayer();
+    renderSelBar();
+    return;
+  }
+  const f = objFrameOf(sel);
+  commitObjectEdit(sel.native, { M: viewToUser(rotateAbout(deg, f.x + f.w / 2, f.y + f.h / 2)) });
+}
+
+/**
+ * A corner: stretch or shrink along the object's own axes, the opposite
+ * corner pinned. Text, images and graphics keep their proportions.
+ */
+function startObjResize(e, sel, corner) {
+  if (!sel || e.button !== 0 || objState.busy) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (sel.anno) { startResize(e, sel.anno, corner); followAnnoGesture(); return; }
+  const o = sel.native, f = objFrameOf(sel), z = state.zoom;
+  const t = f.rot * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  const ex = corner.includes('e') ? 1 : -1, ey = corner.includes('s') ? 1 : -1;
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  // The pinned corner, in view space.
+  const lx = -ex * f.w / 2, ly = -ey * f.h / 2;
+  const ax = cx + lx * c - ly * s, ay = cy + lx * s + ly * c;
+  const uniform = o.kind !== 'path';
+  let ghost = null, Mv = null;
+  trackObjPointer(e, (dx, dy) => {
+    if (!ghost) ghost = objGhost(o);
+    const ux = (dx * c + dy * s) / z, uy = (-dx * s + dy * c) / z;
+    const w = Math.max(2, f.w + ex * ux), h = Math.max(2, f.h + ey * uy);
+    let fx = f.w > 0.5 ? w / f.w : 1, fy = f.h > 0.5 ? h / f.h : 1;
+    if (uniform) { const k = Math.abs(fx - 1) >= Math.abs(fy - 1) ? fx : fy; fx = fy = k; }
+    Mv = matMul(matMul(matMul(matMul([1, 0, 0, 1, -ax, -ay], rotMat(-f.rot)), [fx, 0, 0, fy, 0, 0]), rotMat(f.rot)), [1, 0, 0, 1, ax, ay]);
+    previewObj(ghost, o, Mv);
+  }, (cancelled) => {
+    const still = !Mv || (Math.abs(Mv[0] - 1) < 0.005 && Math.abs(Mv[3] - 1) < 0.005 && Math.abs(Mv[1]) < 0.005 && Math.abs(Mv[2]) < 0.005);
+    if (cancelled || !ghost || still) {
+      if (ghost) ghost.remove();
+      drawObjFrame();
+      return;
+    }
     commitObjectEdit(o, { M: viewToUser(Mv) }, ghost);
   });
+}
+
+/** The points that outline an object in page space. */
+function objPoints(o) {
+  if (o.kind === 'text') return o.pieces.flatMap((p) => p.quad);
+  if (o.quad) return o.quad;
+  if (o.kind === 'path') return o.subs.flatMap((sp) => sp.pts);
+  return boxQuad(o.box);
 }
 
 /** Rewrite the current page with one object changed, and show the result. */
@@ -6611,7 +6830,7 @@ async function commitObjectEdit(o, edit, ghost) {
     item.srcId = id;
     item.srcIndex = 0;
     objState.sel = null;
-    objState.want = edit.del ? null : { kind: o.kind, box: moveBox(o.box, edit.M) };
+    objState.want = edit.del ? null : { kind: o.kind, box: quadBox(objPoints(o).map(([x, y]) => matApply(edit.M, x, y))) };
     await renderPage();
     renderThumbs();
   } catch (err) {
@@ -6632,7 +6851,7 @@ function objPoint(e) {
 
 $('objLayer').addEventListener('pointerdown', (e) => {
   if (!state.objMode || e.button !== 0 || objState.busy) return;
-  if (e.target.classList.contains('handle')) return;
+  if (e.target.closest('.handle, .rot-handle, .move-handle, .obj-del')) return;
   e.stopPropagation();
   const cur = currentObjSel();
   const p = objPoint(e);
@@ -6653,12 +6872,13 @@ $('objLayer').addEventListener('pointerdown', (e) => {
   };
   if (target.native) { startNativeDrag(e, target.native, cycle); return; }
   startDrag(e, target.anno);
-  const follow = () => drawObjFrame();
+  const follow = () => { drawObjFrame(); if (target.anno.kind !== 'edit') drawObjBoxes(); };
   const done = (ev) => {
     window.removeEventListener('pointermove', follow);
     window.removeEventListener('pointerup', done);
     window.removeEventListener('pointercancel', done);
     if (ev.type === 'pointerup' && !dragMoved) cycle();
+    drawObjBoxes();
     drawObjFrame();
   };
   window.addEventListener('pointermove', follow);
@@ -6695,10 +6915,7 @@ function nudgeObj(dx, dy) {
   if (n.o !== o) return;
   n.dx += dx;
   n.dy += dy;
-  n.ghost.style.left = ((o.vr.x + n.dx) * z) + 'px';
-  n.ghost.style.top = ((o.vr.y + n.dy) * z) + 'px';
-  const f = $('objLayer').querySelector('.obj-sel');
-  if (f) f.style.transform = `translate(${n.dx * z}px, ${n.dy * z}px)`;
+  previewObj(n.ghost, o, [1, 0, 0, 1, n.dx, n.dy]);
   clearTimeout(n.timer);
   n.timer = setTimeout(() => {
     objState.nudge = null;
