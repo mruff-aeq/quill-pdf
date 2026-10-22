@@ -31,6 +31,16 @@ Click **Edit text**. Click any line. Type. Done.
 - Too long? Text shrink little to fit. Not shrink too much. Cave can read.
 - Box wrong size? Grab any corner. Pull. Box change shape, text wrap to fit.
 
+### 🧱 Edit object
+
+Click **Edit object**. Now anything on page can be grabbed. Text line. Shape. Line. Picture. Even thing hiding behind page.
+
+- Click to pick. Drag to move. Grab corner to resize. Delete key, or Delete button, to remove.
+- Things stacked? Click again. Get thing underneath.
+- Arrow keys nudge. Shift nudge more.
+- Real change inside PDF, not paint on top. Deleted text gone from file.
+- On phone: tap to pick, then drag inside box.
+
 ### 🖍️ Mark up
 
 Pick colour. Drag across words.

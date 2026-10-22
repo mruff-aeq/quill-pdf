@@ -223,7 +223,15 @@ window.__pending = null;
   .cpanel .hint { color: var(--muted); font-size: 12px; }
   .cpanel > .et-tools { flex: 1 1 0; min-width: 0; }
   .cpanel > .spacer { display: none; }
-  #btnEditDone { margin-left: auto; }
+  #btnEditDone, #btnObjDone { margin-left: auto; }
+  /* Edit-object mode: a picking surface over the whole page. */
+  #objLayer { position: absolute; inset: 0; display: none; z-index: 4; touch-action: manipulation; }
+  body.obj-mode #objLayer { display: block; }
+  .obj-hover, .obj-sel, .obj-ghost { position: absolute; box-sizing: border-box; transform-origin: 50% 50%; pointer-events: none; }
+  .obj-hover { outline: 1px dashed rgba(43,87,154,.9); outline-offset: 1px; }
+  .obj-sel { outline: 1.5px solid var(--accent); outline-offset: 1px; pointer-events: auto; touch-action: none; cursor: move; }
+  .obj-sel .handle { display: block; }
+  .obj-ghost { opacity: .85; outline: 1px dashed var(--accent); }
   .et-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
   .et-tools .tb, .tb {
     min-width: 26px; height: 26px; padding: 0 6px;
@@ -547,7 +555,7 @@ window.__pending = null;
     .et-tools { flex-wrap: nowrap; }
     .cpanel > .et-tools { flex: 0 0 auto; min-width: max-content; }
     .et-tools > * { flex: none; }
-    #btnEditDone { position: sticky; right: -10px; flex: none; margin-left: 0; background: #fff; box-shadow: -8px 0 8px #fff; }
+    #btnEditDone, #btnObjDone { position: sticky; right: -10px; flex: none; margin-left: 0; background: #fff; box-shadow: -8px 0 8px #fff; }
     .tb, .et-tools .tb, .et-tools .tb-swatch { height: 34px; min-width: 34px; }
     .et-tools select, .et-tools input[type=number] { height: 34px; }
     .cpanel .spacer { display: none; }
@@ -633,6 +641,7 @@ window.__pending = null;
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
   <symbol id="i-front" viewBox="0 0 24 24"><rect x="3" y="9" width="12" height="12" rx="1" stroke-dasharray="2 2"/><rect x="9" y="3" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".2"/><path d="M15 9l-5 5M15 9v4M15 9h-4"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><rect x="9" y="3" width="12" height="12" rx="1" stroke-dasharray="2 2"/><rect x="3" y="9" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".2"/><path d="M9 15l5-5M9 15v-4M9 15h4"/></symbol>
+  <symbol id="i-obj" viewBox="0 0 24 24"><rect x="3" y="3" width="12" height="12" rx="1" stroke-dasharray="2 2"/><path d="M10 10l10 3.6-4.2 1.4-1.4 4.2z"/></symbol>
   <symbol id="i-box" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1" fill="currentColor" fill-opacity=".15"/></symbol>
   <symbol id="i-rotl" viewBox="0 0 24 24"><path d="M3 5v5h5"/><path d="M3.5 10a8.5 8.5 0 1 1 1.6 5.5"/><rect x="9" y="12" width="9" height="8" rx="1"/></symbol>
   <symbol id="i-rotr" viewBox="0 0 24 24"><path d="M21 5v5h-5"/><path d="M20.5 10a8.5 8.5 0 1 0-1.6 5.5"/><rect x="6" y="12" width="9" height="8" rx="1"/></symbol>
@@ -682,6 +691,7 @@ window.__pending = null;
     <button class="rtab" data-tab="view" role="tab">View</button>
     <button class="rtab ctx hidden" data-tab="editBar" id="tabEdit" role="tab">Text Editing</button>
     <button class="rtab ctx hidden" data-tab="selBar" id="tabSel" role="tab"><span id="selTitle"></span>&nbsp;Format</button>
+    <button class="rtab ctx hidden" data-tab="objBar" id="tabObj" role="tab">Edit Object</button>
     <button class="collapse" id="ribbonCollapse" title="Collapse the ribbon"><svg class="ic"><use href="#i-chev-up"/></svg></button>
   </div>
 
@@ -717,6 +727,7 @@ window.__pending = null;
       <div class="rgroup">
         <div class="rg-items">
           <button class="rb big" id="btnEdit" title="Click any text on the page to retype it"><svg class="ic big"><use href="#i-edit"/></svg><span>Edit<br>text</span></button>
+          <button class="rb big" id="btnObj" title="Click anything on the page (text, shapes, images, added items on any layer) to move, resize or delete it"><svg class="ic big"><use href="#i-obj"/></svg><span>Edit<br>object</span></button>
         </div>
         <div class="rg-label">Editing</div>
       </div>
@@ -800,6 +811,12 @@ window.__pending = null;
   <div class="cpanel hidden" id="selBar">
     <div class="et-tools" id="selTools"></div>
   </div>
+  <div class="cpanel hidden" id="objBar">
+    <span class="hint" id="objHint">Click anything on the page to select it. Drag to move, drag a corner to resize, Delete to remove. Click it again for what lies underneath.</span>
+    <div class="et-tools" id="objTools"></div>
+    <span class="spacer"></span>
+    <button class="tb" id="btnObjDone">Exit object mode</button>
+  </div>
 </div>
 
 <div class="main">
@@ -843,6 +860,7 @@ window.__pending = null;
       </div>
       <div id="layer"></div>
       <div id="tlInput"></div>
+      <div id="objLayer"></div>
     </div>
   </div>
 </div>
@@ -865,6 +883,7 @@ window.__pending = null;
   <button class="mb tabpick" id="mTabBtn"><span id="mTabLabel">Home</span><svg class="ic"><use href="#i-chev"/></svg></button>
   <span class="spacer"></span>
   <button class="mb" id="mEdit" title="Edit text"><svg class="ic"><use href="#i-edit"/></svg></button>
+  <button class="mb" id="mObj" title="Edit object"><svg class="ic"><use href="#i-obj"/></svg></button>
   <button class="mb" id="mHl" title="Highlighter"><svg class="ic"><use href="#i-hl"/></svg></button>
   <button class="mb" id="mPages" title="Pages"><span class="badge-wrap"><svg class="ic"><use href="#i-pages"/></svg><span class="count" id="pageCount"></span></span></button>
 </nav>
@@ -1470,6 +1489,7 @@ async function renderPage() {
   applyTextLayerTransform(page, item);
   drawTextHotspots();
   drawLayer();
+  if (state.objMode) await refreshObjects();
   const src = state.sources.get(item.srcId);
   const pageInd = `Page ${state.current + 1} of ${state.pages.length}`;
   $('pageInd').textContent = pageInd;
@@ -4139,6 +4159,7 @@ function drawLayer() {
     });
     layer.appendChild(IN_TEXT_SPACE.has(a.kind) ? wrapInTextSpace(el) : el);
   });
+  if (state.objMode) drawObjFrame();
   scheduleCheckpoint();
 }
 
@@ -4550,6 +4571,7 @@ function setMarkColor(color, kind) {
 
 function setMarkMode(kind) {
   state.markMode = kind && state.pages.length > 0 ? kind : null;
+  if (state.markMode && state.objMode) setObjMode(false);
   if (state.markMode && state.editMode) setEditMode(false);
   for (const [k, m] of Object.entries(MARKS)) $(m.btn).classList.toggle('on', state.markMode === k);
   $('layer').classList.toggle('hl-mode', !!state.markMode);
@@ -5457,9 +5479,1287 @@ $('btnExtract').onclick = async () => {
   }
 };
 
+/* ==== OBJECT ENGINE START ==== */
+/* ---------- Edit object: the page's own content as movable objects ----------
+ * A page is a list of drawing instructions (its content stream). To let every
+ * piece of it be picked up like an added item, the stream is read the way a
+ * renderer reads it, tracking the graphics state, and each painted thing
+ * becomes an object with an outline: a line of text, a shape or rule, an
+ * image, or an embedded graphic (form XObject).
+ *
+ * Changing one object rewrites only that object's instructions:
+ *   - moving or resizing wraps it in `q <matrix> cm … Q`, so it keeps its
+ *     place in the drawing order (what is in front stays in front);
+ *   - text sits inside a BT…ET block whose positions run on from one string
+ *     to the next, so the string is swapped for an invisible gap of the same
+ *     width (keeping its neighbours where they were) and a copy is drawn
+ *     right after the block with the same font, size, colour and spacing;
+ *   - an object cut by a clipping path that would move outside it is redrawn
+ *     at the end of the page with its clip moved along with it;
+ *   - deleting removes the instructions, so deleted text is gone from the
+ *     file rather than hidden.
+ * Positions follow the PDF convention: row vectors, p' = p × M.
+ */
+const MAT_I = [1, 0, 0, 1, 0, 0];
+function matMul(m, n) {
+  return [
+    m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3],
+    m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
+    m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5],
+  ];
+}
+function matInv(m) {
+  const det = m[0] * m[3] - m[1] * m[2];
+  if (!det || !Number.isFinite(det)) return null;
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det,
+    (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+}
+const matApply = (m, x, y) => [x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5]];
+const pdfNumStr = (n) => {
+  const r = Math.round(n * 1e6) / 1e6;
+  return Object.is(r, -0) || !Number.isFinite(r) ? '0' : String(r);
+};
+const matStr = (m) => m.map(pdfNumStr).join(' ');
+
+/* ----- Reading the stream into operators ----- */
+const isPdfWs = (c) => c === ' ' || c === '\n' || c === '\r' || c === '\t' || c === '\f' || c === '\0';
+const isPdfDelim = (c) => c === '(' || c === ')' || c === '<' || c === '>' || c === '[' || c === ']' ||
+  c === '{' || c === '}' || c === '/' || c === '%';
+
+/** Skip a literal string starting at src[i] === '('; returns the index after ')'. */
+function skipLiteral(src, i) {
+  let depth = 1, j = i + 1;
+  while (j < src.length && depth) {
+    const d = src[j];
+    if (d === '\\') { j += 2; continue; }
+    if (d === '(') depth++;
+    else if (d === ')') depth--;
+    j++;
+  }
+  return j;
+}
+
+/**
+ * Every operator with its operands and where it sits in the text:
+ * { op, args, start (first operand), opStart (the operator), end }.
+ * Strings carry their decoded bytes and source range; arrays their range.
+ * An inline image (BI … ID data EI) is one operator spanning all of it.
+ */
+function lexContent(src) {
+  const ops = [];
+  const n = src.length;
+  let operands = [];
+  let opStart = -1;
+  const arrays = [];
+  const push = (v, start) => {
+    if (arrays.length) { arrays[arrays.length - 1].push(v); return; }
+    if (opStart < 0) opStart = start;
+    operands.push(v);
+  };
+  let i = 0;
+  while (i < n) {
+    const c = src[i];
+    if (isPdfWs(c)) { i++; continue; }
+    if (c === '%') { while (i < n && src[i] !== '\n' && src[i] !== '\r') i++; continue; }
+    const start = i;
+    if (c === '(') {
+      const j = skipLiteral(src, i);
+      push({ str: decodeLiteralString(src.slice(i + 1, j - 1)), raw: [i, j] }, start);
+      i = j;
+      continue;
+    }
+    if (c === '<' && src[i + 1] === '<') {
+      let depth = 0, j = i;
+      while (j < n) {
+        if (src[j] === '<' && src[j + 1] === '<') { depth++; j += 2; continue; }
+        if (src[j] === '>' && src[j + 1] === '>') { depth--; j += 2; if (!depth) break; continue; }
+        if (src[j] === '(') { j = skipLiteral(src, j); continue; }
+        j++;
+      }
+      push({ dict: src.slice(i, j) }, start);
+      i = j;
+      continue;
+    }
+    if (c === '<') {
+      const j = src.indexOf('>', i + 1);
+      const e = j < 0 ? n : j;
+      push({ str: decodeHexString(src.slice(i + 1, e)), raw: [i, e + 1] }, start);
+      i = e + 1;
+      continue;
+    }
+    if (c === '[') {
+      if (!arrays.length && opStart < 0) opStart = i;
+      const arr = [];
+      arr.rawStart = i;
+      arrays.push(arr);
+      i++;
+      continue;
+    }
+    if (c === ']') {
+      i++;
+      const arr = arrays.pop();
+      if (!arr) continue;
+      arr.raw = [arr.rawStart, i];
+      push(arr, arr.rawStart);
+      continue;
+    }
+    if (c === '/') {
+      let j = i + 1;
+      while (j < n && !isPdfWs(src[j]) && !isPdfDelim(src[j])) j++;
+      push({ name: src.slice(i + 1, j), raw: src.slice(i, j) }, start);
+      i = j;
+      continue;
+    }
+    if (isPdfDelim(c)) { i++; continue; }   // stray ) > { }
+    let j = i;
+    while (j < n && !isPdfWs(src[j]) && !isPdfDelim(src[j])) j++;
+    const tok = src.slice(i, j);
+    i = j;
+    if (/^[+\-]?(\d+\.?\d*|\.\d+)$/.test(tok)) { push(parseFloat(tok), start); continue; }
+    if (/^[+\-.\d]+$/.test(tok)) { push(parseFloat(tok.replace(/^[+-]+/, (s) => s[s.length - 1])) || 0, start); continue; }
+    if (tok === 'true' || tok === 'false') { push(tok === 'true', start); continue; }
+    if (tok === 'null') { push(null, start); continue; }
+    if (arrays.length) continue;            // an operator inside an array is garbage
+    const op = { op: tok, args: operands, start: opStart >= 0 ? opStart : start, opStart: start, end: j };
+    if (tok === 'BI') {
+      const idRe = /[\0\t\n\f\r ]ID[\0\t\n\f\r ]/g;
+      idRe.lastIndex = j - 1;
+      const id = idRe.exec(src);
+      if (!id) break;
+      const eiRe = /[\0\t\n\f\r ]EI(?=[\0\t\n\f\r ]|$)/g;
+      eiRe.lastIndex = id.index + id[0].length;
+      const ei = eiRe.exec(src);
+      if (!ei) break;
+      op.end = ei.index + ei[0].length;
+      i = op.end;
+    }
+    ops.push(op);
+    operands = [];
+    opStart = -1;
+  }
+  return ops;
+}
+
+/* ----- Fonts: how far each string advances ----- */
+const FALLBACK_FONT = {
+  ascent: 0.8, descent: -0.2,
+  codes: (s) => [...s].map((ch) => ({ w: 0.5, space: ch === ' ' })),
+};
+
+const STD_FONT_FOR = (base) => {
+  const b = base.toLowerCase();
+  const bold = /bold|black|heavy|semibold/.test(b);
+  const it = /italic|oblique/.test(b);
+  if (/courier|mono/.test(b)) return bold ? (it ? 'CourierBoldOblique' : 'CourierBold') : (it ? 'CourierOblique' : 'Courier');
+  if (/times|serif|georgia|garamond|roman/.test(b) && !/sans/.test(b)) return bold ? (it ? 'TimesRomanBoldItalic' : 'TimesRomanBold') : (it ? 'TimesRomanItalic' : 'TimesRoman');
+  if (/symbol/.test(b)) return 'Symbol';
+  if (/dingbat/.test(b)) return 'ZapfDingbats';
+  return bold ? (it ? 'HelveticaBoldOblique' : 'HelveticaBold') : (it ? 'HelveticaOblique' : 'Helvetica');
+};
+const WIN_ANSI_TO_UNI = Object.fromEntries(Object.entries(WIN_ANSI).map(([u, b]) => [b, u]));
+
+/** Widths and vertical extent of one font resource, in units of the font size. */
+function readFontMetrics(ctx, dict) {
+  const L = PDFLib;
+  const get = (d, k) => (d ? d.lookup(L.PDFName.of(k)) : undefined);
+  const num = (v, d = 0) => (v instanceof L.PDFNumber ? v.asNumber() : d);
+  const name = (v) => (v instanceof L.PDFName ? v.decodeText() : '');
+  const arr = (v) => (v instanceof L.PDFArray ? v.asArray().map((x) => ctx.lookup(x)) : null);
+  const subtype = name(get(dict, 'Subtype'));
+  let ascent = 0.8, descent = -0.2;
+  const extent = (desc, scale = 0.001) => {
+    if (!(desc instanceof L.PDFDict)) return;
+    const a = num(get(desc, 'Ascent'), NaN) * scale, d = num(get(desc, 'Descent'), NaN) * scale;
+    if (Number.isFinite(a) && a > 0.4 && a < 1.5) ascent = a;
+    if (Number.isFinite(d) && d < 0 && d > -0.6) descent = d;
+  };
+
+  if (subtype === 'Type0') {
+    const desc = arr(get(dict, 'DescendantFonts'));
+    const cid = desc && desc[0] instanceof L.PDFDict ? desc[0] : null;
+    extent(cid && get(cid, 'FontDescriptor'));
+    const dw = num(cid && get(cid, 'DW'), 1000) / 1000;
+    const widths = new Map();
+    const W = arr(cid && get(cid, 'W')) || [];
+    for (let k = 0; k < W.length;) {
+      const first = num(W[k]);
+      if (W[k + 1] instanceof L.PDFArray) {
+        arr(W[k + 1]).forEach((w, j) => widths.set(first + j, num(w) / 1000));
+        k += 2;
+      } else {
+        const last = num(W[k + 1]), w = num(W[k + 2]) / 1000;
+        for (let c = first; c <= last && c - first < 65536; c++) widths.set(c, w);
+        k += 3;
+      }
+    }
+    // Byte lengths of the codes: two for Identity-H/V and most named CMaps,
+    // otherwise whatever an embedded CMap's codespace ranges say.
+    let ranges = [{ len: 2, lo: 0, hi: 0xffff }];
+    const enc = get(dict, 'Encoding');
+    if (enc instanceof L.PDFRawStream) {
+      try {
+        const text = bytesToLatin1(decodePDFRawStream(enc).decode());
+        const found = [];
+        for (const block of text.matchAll(/begincodespacerange([\s\S]*?)endcodespacerange/g)) {
+          for (const m of block[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g)) {
+            found.push({ len: Math.ceil(m[1].length / 2), lo: parseInt(m[1], 16), hi: parseInt(m[2], 16) });
+          }
+        }
+        if (found.length) ranges = found;
+      } catch { /* keep two-byte codes */ }
+    }
+    const lens = [...new Set(ranges.map((r) => r.len))].sort((p, q) => p - q);
+    return {
+      ascent, descent,
+      codes(s) {
+        const out = [];
+        for (let i = 0; i < s.length;) {
+          let len = 0, code = 0;
+          for (const l of lens) {
+            if (i + l > s.length) break;
+            let c = 0;
+            for (let k = 0; k < l; k++) c = c * 256 + (s.charCodeAt(i + k) & 255);
+            if (ranges.some((r) => r.len === l && c >= r.lo && c <= r.hi)) { len = l; code = c; break; }
+          }
+          if (!len) {
+            len = Math.min(lens[lens.length - 1] || 2, s.length - i);
+            for (let k = 0; k < len; k++) code = code * 256 + (s.charCodeAt(i + k) & 255);
+          }
+          out.push({ w: widths.has(code) ? widths.get(code) : dw, space: len === 1 && code === 32 });
+          i += len;
+        }
+        return out;
+      },
+    };
+  }
+
+  // Simple fonts: Type1, TrueType, MMType1, Type3.
+  let scale = 0.001;
+  if (subtype === 'Type3') {
+    const fm = arr(get(dict, 'FontMatrix'));
+    if (fm && fm.length === 6) scale = num(fm[0], 0.001);
+    const bbox = arr(get(dict, 'FontBBox'));
+    const sy = fm && fm.length === 6 ? num(fm[3], 0.001) : 0.001;
+    if (bbox && bbox.length === 4) {
+      const top = num(bbox[3]) * sy, bottom = num(bbox[1]) * sy;
+      if (top > 0.2 && top < 2) ascent = top;
+      if (bottom < 0 && bottom > -1) descent = bottom;
+    }
+  }
+  const fd = get(dict, 'FontDescriptor');
+  extent(fd);
+  const first = num(get(dict, 'FirstChar'), 0);
+  const list = arr(get(dict, 'Widths'));
+  const missing = num(fd instanceof L.PDFDict ? get(fd, 'MissingWidth') : undefined, 0) * scale;
+  let std = null;
+  if (!list) {
+    try {
+      std = L.StandardFontEmbedder.for(L.StandardFonts[STD_FONT_FOR(name(get(dict, 'BaseFont')).replace(/^[A-Z]{6}\+/, ''))]);
+    } catch { std = null; }
+  }
+  const cache = new Map();
+  const widthOf = (code) => {
+    if (list) {
+      const w = list[code - first];
+      return w instanceof L.PDFNumber ? w.asNumber() * scale : missing;
+    }
+    if (cache.has(code)) return cache.get(code);
+    let w = 0.5;
+    if (std) {
+      try {
+        const ch = String.fromCharCode(code);
+        w = std.widthOfTextAtSize(WIN_ANSI_TO_UNI[ch] || ch, 1);
+      } catch { w = 0.5; }
+    }
+    cache.set(code, w);
+    return w;
+  };
+  return {
+    ascent, descent,
+    codes: (s) => [...s].map((ch) => {
+      const code = ch.charCodeAt(0) & 255;
+      return { w: widthOf(code), space: code === 32 };
+    }),
+  };
+}
+
+/**
+ * What the page's resources hold: its fonts' metrics and its XObjects'
+ * kinds and frames, looked up lazily by resource name.
+ */
+function pageResources(lib, pageIndex) {
+  const L = PDFLib;
+  const ctx = lib.context;
+  const node = lib.getPage(pageIndex).node;
+  const res = node.Resources();
+  const sub = (k) => {
+    const d = res && res.lookup(L.PDFName.of(k));
+    return d instanceof L.PDFDict ? d : null;
+  };
+  const fonts = sub('Font'), xobjs = sub('XObject');
+  const fontCache = new Map(), xoCache = new Map();
+  const nums = (v) => (v instanceof L.PDFArray ? v.asArray().map((x) => { const o = ctx.lookup(x); return o instanceof L.PDFNumber ? o.asNumber() : 0; }) : null);
+  return {
+    font(name) {
+      if (!name || !fonts) return null;
+      if (!fontCache.has(name)) {
+        let m = null;
+        try {
+          const d = fonts.lookup(L.PDFName.of(name));
+          if (d instanceof L.PDFDict) m = readFontMetrics(ctx, d);
+        } catch { m = null; }
+        fontCache.set(name, m);
+      }
+      return fontCache.get(name);
+    },
+    xobject(name) {
+      if (!name || !xobjs) return null;
+      if (!xoCache.has(name)) {
+        let info = null;
+        try {
+          const s = xobjs.lookup(L.PDFName.of(name));
+          const dict = s && s.dict;
+          if (dict) {
+            const st = dict.lookup(L.PDFName.of('Subtype'));
+            const subtype = st instanceof L.PDFName ? st.decodeText() : '';
+            const bbox = nums(dict.lookup(L.PDFName.of('BBox')));
+            const matrix = nums(dict.lookup(L.PDFName.of('Matrix')));
+            info = {
+              subtype,
+              bbox: bbox && bbox.length === 4 ? bbox : [0, 0, 1, 1],
+              matrix: matrix && matrix.length === 6 ? matrix : MAT_I,
+            };
+          }
+        } catch { info = null; }
+        xoCache.set(name, info);
+      }
+      return xoCache.get(name);
+    },
+  };
+}
+
+/** The page's content streams joined into one string, the way a reader sees them. */
+function readPageContent(lib, pageIndex) {
+  const L = PDFLib;
+  const ctx = lib.context;
+  const node = lib.getPage(pageIndex).node;
+  const contents = node.get(L.PDFName.of('Contents'));
+  if (!contents) return '';
+  const resolved = ctx.lookup(contents);
+  const refs = resolved instanceof L.PDFArray ? resolved.asArray() : [contents];
+  return refs.map((ref) => {
+    const s = ctx.lookup(ref);
+    if (s instanceof L.PDFRawStream) return bytesToLatin1(decodePDFRawStream(s).decode());
+    if (s && typeof s.getContents === 'function') return bytesToLatin1(s.getContents());
+    return '';
+  }).join('\n');
+}
+
+/* ----- Interpreting the stream ----- */
+const newGState = () => ({
+  ctm: MAT_I, fillCS: null, fill: null, strokeCS: null, stroke: null, gs: [], lw: 1, misc: {},
+  font: null, fontRaw: null, size: 0, Tc: 0, Tw: 0, Tz: 100, TL: 0, Ts: 0, Tr: 0, clips: [],
+});
+const cloneGState = (g) => ({ ...g, gs: g.gs.slice(), misc: { ...g.misc }, clips: g.clips.slice() });
+
+const quadBox = (pts) => {
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  return { x0, y0, x1: Math.max(...xs), y1: Math.max(...ys) };
+};
+const boxQuad = (b) => [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]];
+const boxUnion = (a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) });
+const clipBoxOf = (g) => g.clips.reduce((acc, c) => (acc ? {
+  x0: Math.max(acc.x0, c.box.x0), y0: Math.max(acc.y0, c.box.y0),
+  x1: Math.min(acc.x1, c.box.x1), y1: Math.min(acc.y1, c.box.y1),
+} : c.box), null);
+
+/**
+ * Read a content stream into objects, in drawing order (later = in front).
+ * Each object: { kind: 'text'|'path'|'image'|'form', box (user space),
+ * order, and what the rewriter needs to change it }.
+ */
+function scanContent(src, res) {
+  const ops = lexContent(src);
+  let g = newGState();
+  const stack = [];
+  let Tm = MAT_I, Tlm = MAT_I;
+  let openPieces = [];
+  let path = null;
+  const pieces = [];
+  const objects = [];
+  const raw = (o) => src.slice(o.start, o.end);
+
+  const flatten = (p0, p1, p2, p3, out) => {
+    for (let k = 1; k <= 8; k++) {
+      const t = k / 8, u = 1 - t;
+      out.push([
+        u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+        u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
+      ]);
+    }
+  };
+  const pathOp = (o) => {
+    if (!path) path = { start: o.start, consEnd: o.end, subs: [], cur: [0, 0], ctm: g.ctm };
+    path.consEnd = o.end;
+    return path;
+  };
+  const P = (x, y) => matApply(g.ctm, x, y);
+
+  ops.forEach((o, idx) => {
+    const a = o.args;
+    const num = (k) => (typeof a[k] === 'number' ? a[k] : 0);
+    switch (o.op) {
+      case 'q': stack.push(cloneGState(g)); break;
+      case 'Q': if (stack.length) g = stack.pop(); break;
+      case 'cm': g.ctm = matMul([num(0), num(1), num(2), num(3), num(4), num(5)], g.ctm); break;
+      case 'w': g.lw = num(0); break;
+      case 'J': case 'j': case 'M': case 'd': case 'ri': case 'i': g.misc[o.op] = raw(o); break;
+      case 'gs': { const r = raw(o); g.gs = g.gs.filter((x) => x !== r).concat(r); break; }
+      case 'CS': g.strokeCS = raw(o); g.stroke = null; break;
+      case 'cs': g.fillCS = raw(o); g.fill = null; break;
+      case 'SC': case 'SCN': g.stroke = raw(o); break;
+      case 'sc': case 'scn': g.fill = raw(o); break;
+      case 'G': case 'RG': case 'K': g.strokeCS = null; g.stroke = raw(o); break;
+      case 'g': case 'rg': case 'k': g.fillCS = null; g.fill = raw(o); break;
+      case 'Tc': g.Tc = num(0); break;
+      case 'Tw': g.Tw = num(0); break;
+      case 'Tz': g.Tz = num(0); break;
+      case 'TL': g.TL = num(0); break;
+      case 'Ts': g.Ts = num(0); break;
+      case 'Tr': g.Tr = num(0); break;
+      case 'Tf': g.font = a[0] && a[0].name; g.fontRaw = a[0] && a[0].raw; g.size = num(1); break;
+      case 'BT': Tm = Tlm = MAT_I; openPieces = []; break;
+      case 'ET': openPieces.forEach((p) => { p.etEnd = o.end; }); openPieces = []; break;
+      case 'TD': g.TL = -num(1); // falls through
+      case 'Td': Tlm = matMul([1, 0, 0, 1, num(0), num(1)], Tlm); Tm = Tlm; break;
+      case 'Tm': Tlm = Tm = [num(0), num(1), num(2), num(3), num(4), num(5)]; break;
+      case 'T*': Tlm = matMul([1, 0, 0, 1, 0, -g.TL], Tlm); Tm = Tlm; break;
+      case 'Tj': case 'TJ': case "'": case '"': {
+        if (o.op === '"') { g.Tw = num(0); g.Tc = num(1); }
+        if (o.op === "'" || o.op === '"') { Tlm = matMul([1, 0, 0, 1, 0, -g.TL], Tlm); Tm = Tlm; }
+        const strTok = o.op === 'TJ' ? a[0] : a[o.op === '"' ? 2 : 0];
+        if (!strTok || !strTok.raw) break;
+        const elems = o.op === 'TJ' ? (Array.isArray(strTok) ? strTok : []) : [strTok];
+        const fm = res.font(g.font) || FALLBACK_FONT;
+        const Th = g.Tz / 100, Tfs = g.size;
+        const lineH = (fm.ascent - fm.descent) * Tfs;
+        const visible = g.Tr !== 3 && g.Tr !== 7;
+        // One operator can draw several things: a TJ array whose strings are
+        // pushed apart by a gap wider than a few spaces (a table row written
+        // as one array) becomes one segment per stretch of text.
+        const info = { op: o, items: [], Tfs, Th, g: cloneGState(g) };
+        let x = 0, seg = null;
+        const close = () => { if (seg) { seg.adv = x - seg.x0; info.items.push({ seg }); seg = null; } };
+        for (const el of elems) {
+          if (typeof el === 'number') {
+            const tx = -el / 1000 * Tfs * Th;
+            if (o.op === 'TJ' && lineH > 0 && Math.abs(tx) > 0.6 * lineH) {
+              close();
+              info.items.push({ num: el });
+            } else {
+              if (!seg) seg = { x0: x, parts: [], ink: false };
+              seg.parts.push(pdfNumStr(el));
+            }
+            x += tx;
+            continue;
+          }
+          if (!el || el.str == null || !el.raw) continue;
+          if (!seg) seg = { x0: x, parts: [], ink: false };
+          seg.parts.push(src.slice(el.raw[0], el.raw[1]));
+          for (const { w, space } of fm.codes(el.str)) {
+            x += (w * Tfs + g.Tc + (space ? g.Tw : 0)) * Th;
+            if (!space && visible) seg.ink = true;
+          }
+        }
+        close();
+        for (const { seg: sg } of info.items.filter((it) => it.seg)) {
+          const pTm = matMul([1, 0, 0, 1, sg.x0, 0], Tm);
+          const trm = matMul(pTm, g.ctm);
+          const y0 = g.Ts + fm.descent * Tfs, y1 = g.Ts + fm.ascent * Tfs;
+          const piece = {
+            op: o, idx, info, seg: sg, Tm: pTm, adv: sg.adv, ink: sg.ink, g: info.g, Tfs, Th, etEnd: null,
+            quad: [[0, y0], [sg.adv, y0], [sg.adv, y1], [0, y1]].map(([px, py]) => matApply(trm, px, py)),
+            showRaw: o.op === 'TJ' ? `[${sg.parts.join(' ')}] TJ` : src.slice(strTok.raw[0], strTok.raw[1]) + ' Tj',
+            origin: matApply(trm, 0, g.Ts), end2: matApply(trm, sg.adv, g.Ts),
+            up: Math.hypot(trm[2], trm[3]) * Math.max(Tfs, 0.01) * (fm.ascent - fm.descent),
+          };
+          sg.piece = piece;
+          pieces.push(piece);
+          openPieces.push(piece);
+        }
+        Tm = matMul([1, 0, 0, 1, x, 0], Tm);
+        break;
+      }
+      case 'm': { const p = pathOp(o); const pt = P(num(0), num(1)); p.subs.push({ pts: [pt], closed: false }); p.cur = pt; p.curUser = [num(0), num(1)]; break; }
+      case 'l': {
+        const p = pathOp(o); const pt = P(num(0), num(1));
+        if (!p.subs.length) p.subs.push({ pts: [p.cur], closed: false });
+        p.subs[p.subs.length - 1].pts.push(pt); p.cur = pt; break;
+      }
+      case 'c': case 'v': case 'y': {
+        const p = pathOp(o);
+        if (!p.subs.length) p.subs.push({ pts: [p.cur], closed: false });
+        const pts = o.op === 'c' ? [P(num(0), num(1)), P(num(2), num(3)), P(num(4), num(5))]
+          : o.op === 'v' ? [p.cur, P(num(0), num(1)), P(num(2), num(3))]
+            : [P(num(0), num(1)), P(num(2), num(3)), P(num(2), num(3))];
+        flatten(p.cur, pts[0], pts[1], pts[2], p.subs[p.subs.length - 1].pts);
+        p.cur = pts[2];
+        break;
+      }
+      case 'h': { const p = pathOp(o); if (p.subs.length) { p.subs[p.subs.length - 1].closed = true; p.cur = p.subs[p.subs.length - 1].pts[0]; } break; }
+      case 're': {
+        const p = pathOp(o);
+        const x = num(0), y = num(1), w = num(2), h = num(3);
+        p.subs.push({ pts: [P(x, y), P(x + w, y), P(x + w, y + h), P(x, y + h)], closed: true });
+        p.cur = P(x, y);
+        break;
+      }
+      case 'W': case 'W*': if (path) { path.clip = o.op; path.clipOp = o; } break;
+      case 'S': case 's': case 'f': case 'F': case 'f*': case 'B': case 'B*': case 'b': case 'b*': case 'n': {
+        if (!path) break;
+        const p = path;
+        path = null;
+        const pts = p.subs.flatMap((s) => s.pts);
+        if (!pts.length) break;
+        if (o.op === 's' || o.op === 'b' || o.op === 'b*') p.subs.forEach((s) => { s.closed = true; });
+        const stroke = /^[SsBb]/.test(o.op);
+        const fill = /^[fFBb]/.test(o.op);
+        const consText = src.slice(p.start, p.clipOp ? p.clipOp.start : p.consEnd);
+        if (o.op !== 'n') {
+          const scale = Math.sqrt(Math.abs(g.ctm[0] * g.ctm[3] - g.ctm[1] * g.ctm[2])) || 1;
+          const lw = stroke ? Math.max(g.lw * scale, 0.1) : 0;
+          const b = quadBox(pts);
+          objects.push({
+            kind: 'path', order: idx, start: p.start, end: o.end, paintOp: o, clipOp: p.clipOp || null,
+            consText, stroke, fill, lw, subs: p.subs, g: cloneGState(g),
+            box: { x0: b.x0 - lw / 2, y0: b.y0 - lw / 2, x1: b.x1 + lw / 2, y1: b.y1 + lw / 2 },
+          });
+        }
+        if (p.clip) g.clips.push({ text: consText, rule: p.clip, ctm: p.ctm, box: quadBox(pts) });
+        break;
+      }
+      case 'Do': {
+        const name = a[0] && a[0].name;
+        const xo = res.xobject(name);
+        if (!xo || (xo.subtype !== 'Image' && xo.subtype !== 'Form')) break;
+        const m = xo.subtype === 'Form' ? matMul(xo.matrix, g.ctm) : g.ctm;
+        const bb = xo.subtype === 'Form' ? xo.bbox : [0, 0, 1, 1];
+        const quad = [[bb[0], bb[1]], [bb[2], bb[1]], [bb[2], bb[3]], [bb[0], bb[3]]].map(([x, y]) => matApply(m, x, y));
+        objects.push({ kind: xo.subtype === 'Image' ? 'image' : 'form', order: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
+        break;
+      }
+      case 'BI': {
+        const quad = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([x, y]) => matApply(g.ctm, x, y));
+        objects.push({ kind: 'image', inline: true, order: idx, start: o.start, end: o.end, quad, box: quadBox(quad), g: cloneGState(g) });
+        break;
+      }
+      default: break;
+    }
+  });
+
+  // Strings that run on along one baseline make one text object, so a click
+  // takes the line or phrase rather than a single word or letter.
+  let group = null;
+  const flush = () => {
+    if (group && group.pieces.some((p) => p.ink) && group.pieces.every((p) => p.etEnd != null && p.g.fontRaw)) {
+      objects.push({
+        kind: 'text', order: group.pieces[0].idx, pieces: group.pieces,
+        box: group.pieces.map((p) => quadBox(p.quad)).reduce(boxUnion), g: group.pieces[0].g,
+      });
+    }
+    group = null;
+  };
+  for (const p of pieces) {
+    if (!(p.adv > 0) && !p.ink) continue;
+    if (group) {
+      const last = group.pieces[group.pieces.length - 1];
+      const dx = last.end2[0] - last.origin[0], dy = last.end2[1] - last.origin[1];
+      const len = Math.hypot(dx, dy);
+      const ux = len ? dx / len : 1, uy = len ? dy / len : 0;
+      const qx = p.end2[0] - p.origin[0], qy = p.end2[1] - p.origin[1];
+      const qlen = Math.hypot(qx, qy);
+      const sameDir = !qlen || !len || (ux * qx + uy * qy) / qlen > 0.995;
+      const ox = p.origin[0] - last.end2[0], oy = p.origin[1] - last.end2[1];
+      const along = ox * ux + oy * uy;
+      const across = Math.abs(-ox * uy + oy * ux);
+      const h = Math.max(1, Math.min(last.up, p.up));
+      if (sameDir && across < 0.2 * h && along > -0.5 * h && along < 0.6 * h) {
+        group.pieces.push(p);
+        continue;
+      }
+      flush();
+    }
+    group = { pieces: [p] };
+  }
+  flush();
+
+  objects.sort((p, q) => p.order - q.order);
+  return { objects, endDepth: stack.length };
+}
+
+/* ----- Rewriting ----- */
+function stateOps(g) {
+  const out = [];
+  if (g.fillCS) out.push(g.fillCS);
+  if (g.fill) out.push(g.fill); else if (!g.fillCS) out.push('0 g');
+  if (g.strokeCS) out.push(g.strokeCS);
+  if (g.stroke) out.push(g.stroke); else if (!g.strokeCS) out.push('0 G');
+  out.push(pdfNumStr(g.lw) + ' w');
+  out.push(...Object.values(g.misc), ...g.gs);
+  return out.join(' ');
+}
+const textStateOps = (g) =>
+  `${g.fontRaw} ${pdfNumStr(g.size)} Tf ${pdfNumStr(g.Tc)} Tc ${pdfNumStr(g.Tw)} Tw ` +
+  `${pdfNumStr(g.Tz)} Tz ${pdfNumStr(g.TL)} TL ${pdfNumStr(g.Ts)} Ts ${pdfNumStr(g.Tr)} Tr`;
+
+/** The instructions that draw `obj` by themselves, assuming the state is already set. */
+function objectBody(src, obj) {
+  if (obj.kind === 'path') return `${obj.consText}\n${obj.paintOp.op}`;
+  if (obj.kind === 'text') {
+    return obj.pieces.map((p) => `q ${stateOps(p.g)} BT ${textStateOps(p.g)} ${matStr(p.Tm)} Tm ${p.showRaw} ET Q`).join('\n');
+  }
+  return src.slice(obj.start, obj.end);
+}
+
+/**
+ * A show-text operator with some of its segments taken out: each removed
+ * stretch becomes an invisible gap of the same width, so the strings after
+ * it (in this operator and the rest of the text block) stay where they were.
+ */
+function textOpWithout(info, removed) {
+  const k = info.Tfs * info.Th;
+  const gap = (adv) => (k ? pdfNumStr(-adv * 1000 / k) : '0');
+  const o = info.op;
+  if (o.op === 'TJ') {
+    const parts = info.items.map((it) => (it.num !== undefined ? pdfNumStr(it.num)
+      : removed.has(it.seg.piece) ? gap(it.seg.adv) : it.seg.parts.join(' ')));
+    return `[${parts.join(' ')}] TJ`;
+  }
+  const sg = info.items[0] && info.items[0].seg;
+  const tj = sg ? `[${gap(sg.adv)}] TJ` : '';
+  if (o.op === "'") return `T* ${tj}`;
+  if (o.op === '"') return `${pdfNumStr(info.g.Tw)} Tw ${pdfNumStr(info.g.Tc)} Tc T* ${tj}`;
+  return tj;
+}
+
+const boxInside = (b, c, tol = 0.75) => b.x0 >= c.x0 - tol && b.y0 >= c.y0 - tol && b.x1 <= c.x1 + tol && b.y1 <= c.y1 + tol;
+const moveBox = (b, M) => quadBox(boxQuad(b).map(([x, y]) => matApply(M, x, y)));
+
+/**
+ * Apply edits to a content stream: [{ obj, del: true } | { obj, M }], where M
+ * is the change in page space (p' = p × M). Returns the new stream text.
+ */
+function rewriteContent(src, scan, edits) {
+  const splices = [];
+  const tail = [];
+  const removedText = new Map();   // show-text operator → the segments taken out of it
+  let seq = 0;
+  const splice = (at, end, text) => splices.push({ at, end, text, seq: seq++ });
+  const relocated = (obj, M) => {
+    const lines = ['q'];
+    for (const c of obj.g.clips) {
+      const A = matMul(c.ctm, M);
+      const back = matInv(A);
+      if (!back) continue;
+      lines.push(`${matStr(A)} cm ${c.text} ${c.rule} n ${matStr(back)} cm`);
+    }
+    lines.push(`${matStr(matMul(obj.g.ctm, M))} cm`, stateOps(obj.g), objectBody(src, obj), 'Q');
+    return lines.join('\n');
+  };
+
+  for (const { obj, del, M } of edits) {
+    const C = obj.g.ctm;
+    const Cinv = matInv(C);
+    const A = !del && Cinv ? matMul(matMul(C, M), Cinv) : null;
+    if (!del && !A) continue;
+    const clip = clipBoxOf(obj.g);
+    const relocate = !del && clip && !boxInside(moveBox(obj.box, M), clip);
+
+    if (obj.kind === 'text') {
+      for (const p of obj.pieces) {
+        if (!removedText.has(p.info)) removedText.set(p.info, new Set());
+        removedText.get(p.info).add(p);
+        if (!del && !relocate) {
+          const copy = `q ${matStr(matMul(matMul(p.g.ctm, M), matInv(p.g.ctm)))} cm ${stateOps(p.g)} ` +
+            `BT ${textStateOps(p.g)} ${matStr(p.Tm)} Tm ${p.showRaw} ET Q`;
+          splice(p.etEnd, p.etEnd, '\n' + copy + '\n');
+        }
+      }
+      if (relocate) tail.push(relocated(obj, M));
+      continue;
+    }
+
+    if (obj.kind === 'path') {
+      if (obj.clipOp) {
+        // The path also clips what follows: keep the clip, drop the paint.
+        splice(obj.paintOp.opStart, obj.paintOp.end, 'n');
+        if (!del) {
+          if (relocate) tail.push(relocated(obj, M));
+          else splice(obj.end, obj.end, `\nq ${matStr(A)} cm\n${objectBody(src, obj)}\nQ\n`);
+        }
+      } else if (del) {
+        splice(obj.start, obj.end, '');
+      } else if (relocate) {
+        splice(obj.start, obj.end, '');
+        tail.push(relocated(obj, M));
+      } else {
+        splice(obj.start, obj.start, `q ${matStr(A)} cm\n`);
+        splice(obj.end, obj.end, '\nQ');
+      }
+      continue;
+    }
+
+    // Images, inline images and embedded graphics: one self-contained operator.
+    if (del) splice(obj.start, obj.end, '');
+    else if (relocate) { splice(obj.start, obj.end, ''); tail.push(relocated(obj, M)); }
+    else {
+      splice(obj.start, obj.start, `q ${matStr(A)} cm `);
+      splice(obj.end, obj.end, ' Q');
+    }
+  }
+
+  for (const [info, removed] of removedText) splice(info.op.start, info.op.end, textOpWithout(info, removed));
+  splices.sort((p, q) => (q.at - p.at) || (q.seq - p.seq));
+  let out = src;
+  for (const s of splices) out = out.slice(0, s.at) + s.text + out.slice(s.end);
+  if (tail.length) {
+    out = 'q\n' + out + '\n' + 'Q\n'.repeat(scan.endDepth) + 'Q\n' + tail.join('\n') + '\n';
+  }
+  return out;
+}
+/* ==== OBJECT ENGINE END ==== */
+
+/* ---------- Edit-object mode ----------
+ * Everything on the page can be picked: the page's own text lines, shapes,
+ * rules, images and graphics, and every added item on any layer, including
+ * the ones behind the page. A click takes the topmost thing under the
+ * pointer; clicking it again takes the one beneath. Drag to move, drag a
+ * corner to resize, Delete removes it. Changes to the page's own objects
+ * rewrite that page (see the object engine) and re-render it, so undo,
+ * thumbnails, Edit text and Save all see the result.
+ *
+ * On touch screens a drag that starts on an unselected spot scrolls the page
+ * as usual; tap to select first, then drag inside the selection frame.
+ */
+state.objMode = false;
+const objState = {
+  key: '', text: '', scan: null, list: [], views: null,
+  sel: null,        // { native: object } — added items are selected through state.activeAnno
+  hover: null, busy: false, want: null, nudge: null,
+};
+const OBJ_KIND_LABEL = { text: 'Text', path: 'Shape', image: 'Image', form: 'Graphic' };
+const ANNO_KIND_LABEL = { text: 'Text', rect: 'Box', image: 'Image', edit: 'Text box', draw: 'Text' };
+
+function viewRect(box, vp) {
+  const pts = boxQuad(box).map(([x, y]) => vp.convertToViewportPoint(x, y));
+  const b = quadBox(pts);
+  return { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 };
+}
+
+const rectOverlap = (a, b) =>
+  Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) *
+  Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+
+const WHITE_FILL = /^(1 g|1 1 1 rg|0 0 0 0 k|1 sc|1 1 1 sc)$/;
+
+/** Read the current page's objects (once per page version) and place them on screen. */
+async function refreshObjects() {
+  if (!state.objMode || !state.pages.length) return;
+  const item = state.pages[state.current];
+  const page = await getPdfPage(item);
+  objState.views = {
+    vp0: page.getViewport({ scale: 1, rotation: 0 }),
+    vp1: page.getViewport({ scale: 1, rotation: item.rotation }),
+  };
+  const key = `${item.srcId}:${item.srcIndex}`;
+  if (objState.key !== key) {
+    const src = state.sources.get(item.srcId);
+    try {
+      if (!src.libDoc) src.libDoc = await PDFDocument.load(src.bytes, { ignoreEncryption: true });
+      objState.text = readPageContent(src.libDoc, item.srcIndex);
+      objState.scan = scanContent(objState.text, pageResources(src.libDoc, item.srcIndex));
+    } catch (err) {
+      console.warn('Could not read the page objects', err);
+      objState.text = '';
+      objState.scan = { objects: [], endDepth: 0 };
+    }
+    objState.key = key;
+  }
+  const { vp0, vp1 } = objState.views;
+  const pageArea = vp1.width * vp1.height;
+  const retired = item.retired || [];
+  objState.list = objState.scan.objects.filter((o) => {
+    o.vr = viewRect(o.box, vp1);
+    o.ur = viewRect(o.box, vp0);
+    // The plain white sheet some writers paint first is the paper, not an object.
+    if (o.kind === 'path' && o.fill && !o.stroke && o.vr.w * o.vr.h > pageArea * 0.9 && WHITE_FILL.test((o.g.fill || '').trim())) return false;
+    // Text already taken over by an edit box is edited there.
+    if (o.kind === 'text' && retired.some((r) => rectOverlap(r, o.ur) > 0.5 * o.ur.w * o.ur.h)) return false;
+    return true;
+  });
+  if (objState.sel && !objState.list.includes(objState.sel.native)) objState.sel = null;
+  if (objState.want) {
+    const { kind, box } = objState.want;
+    objState.want = null;
+    const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
+    let best = null, bestD = 20;
+    for (const o of objState.list) {
+      if (o.kind !== kind) continue;
+      const d = Math.hypot((o.box.x0 + o.box.x1) / 2 - cx, (o.box.y0 + o.box.y1) / 2 - cy) +
+        Math.abs((o.box.x1 - o.box.x0) - (box.x1 - box.x0)) + Math.abs((o.box.y1 - o.box.y0) - (box.y1 - box.y0));
+      if (d < bestD) { bestD = d; best = o; }
+    }
+    if (best) objState.sel = { native: best };
+  }
+  drawObjFrame();
+}
+
+function pointInSubs(subs, x, y) {
+  let inside = false;
+  for (const s of subs) {
+    const p = s.pts;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+      const [xi, yi] = p[i], [xj, yj] = p[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function segDist(a, b, x, y) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / len2)) : 0;
+  return Math.hypot(a[0] + t * dx - x, a[1] + t * dy - y);
+}
+
+function nearSubs(subs, x, y, d) {
+  for (const s of subs) {
+    const p = s.pts, n = p.length;
+    if (n === 1 && Math.hypot(p[0][0] - x, p[0][1] - y) <= d) return true;
+    const segs = s.closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) if (segDist(p[i], p[(i + 1) % n], x, y) <= d) return true;
+  }
+  return false;
+}
+
+function nativeHit(o, x, y, tol) {
+  const b = o.box;
+  if (x < b.x0 - tol || x > b.x1 + tol || y < b.y0 - tol || y > b.y1 + tol) return false;
+  if (o.kind !== 'path') return true;
+  if (b.x1 - b.x0 < tol * 2 || b.y1 - b.y0 < tol * 2) return true;   // hairlines and thin rules
+  if (o.fill && pointInSubs(o.subs, x, y)) return true;
+  return o.stroke && nearSubs(o.subs, x, y, o.lw / 2 + tol);
+}
+
+/** Where an added item sits in the rotated page view, at zoom 1. */
+function annoFrame(a) {
+  if (a.kind === 'edit') return { ...toCanvasRect(annoBox(a), objState.views.vp0, objState.views.vp1), rot: 0 };
+  const b = annoBox(a);
+  return { x: b.x, y: b.y, w: b.w, h: b.h, rot: a.rot || 0 };
+}
+
+function annoHit(a, x, y, tol) {
+  const f = annoFrame(a);
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  const t = -f.rot * Math.PI / 180;
+  const lx = cx + (x - cx) * Math.cos(t) - (y - cy) * Math.sin(t);
+  const ly = cy + (x - cx) * Math.sin(t) + (y - cy) * Math.cos(t);
+  return lx >= f.x - tol && lx <= f.x + f.w + tol && ly >= f.y - tol && ly <= f.y + f.h + tol;
+}
+
+/** Everything under a point, topmost first: items in front, the page's objects, items behind. */
+function objHits(x, y) {
+  if (!objState.views) return [];
+  const tol = 3 / state.zoom;
+  const annos = stackingOrder(state.pages[state.current].annos).filter((a) => LAYERABLE.has(a.kind)).reverse();
+  const hitAnnos = annos.filter((a) => annoHit(a, x, y, tol));
+  const [ux, uy] = objState.views.vp1.convertToPdfPoint(x, y);
+  const natives = objState.list.filter((o) => nativeHit(o, ux, uy, tol)).reverse().map((o) => ({ native: o }));
+  return [
+    ...hitAnnos.filter((a) => layerOf(a) >= PAGE_LAYER).map((a) => ({ anno: a })),
+    ...natives,
+    ...hitAnnos.filter((a) => layerOf(a) < PAGE_LAYER).map((a) => ({ anno: a })),
+  ];
+}
+
+function currentObjSel() {
+  if (objState.sel && objState.list.includes(objState.sel.native)) return objState.sel;
+  const a = state.activeAnno;
+  if (a && LAYERABLE.has(a.kind) && state.pages[state.current].annos.includes(a)) return { anno: a };
+  return null;
+}
+const sameObjTarget = (p, q) => !!p && !!q && (p.native ? p.native === q.native : p.anno === q.anno);
+
+function selectObj(t) {
+  if (t && t.anno) {
+    objState.sel = null;
+    markSelected(t.anno);
+  } else {
+    objState.sel = t || null;
+    if (state.activeAnno) {
+      state.activeAnno = null;
+      document.querySelectorAll('.anno.sel').forEach((el) => el.classList.remove('sel'));
+      renderSelBar();
+    }
+  }
+  drawObjFrame();
+}
+
+function objFrameOf(t) {
+  if (t.native) return { ...t.native.vr, rot: 0 };
+  return annoFrame(t.anno);
+}
+
+function placeBox(el, f, z = state.zoom) {
+  el.style.left = (f.x * z) + 'px';
+  el.style.top = (f.y * z) + 'px';
+  el.style.width = Math.max(2, f.w * z) + 'px';
+  el.style.height = Math.max(2, f.h * z) + 'px';
+  el.style.transform = f.rot ? `rotate(${f.rot}deg)` : '';
+}
+
+function drawObjFrame() {
+  const host = $('objLayer');
+  host.querySelectorAll('.obj-hover, .obj-sel').forEach((el) => el.remove());
+  updateObjBar();
+  if (!state.objMode || !objState.views) return;
+  const sel = currentObjSel();
+  if (objState.hover && !sameObjTarget(objState.hover, sel)) {
+    const h = document.createElement('div');
+    h.className = 'obj-hover';
+    placeBox(h, objFrameOf(objState.hover));
+    host.appendChild(h);
+  }
+  if (sel) {
+    const f = document.createElement('div');
+    f.className = 'obj-sel';
+    placeBox(f, objFrameOf(sel));
+    CORNERS.forEach((corner) => {
+      const h = document.createElement('div');
+      h.className = 'handle ' + corner;
+      h.title = 'Drag to resize';
+      h.addEventListener('pointerdown', (e) => startObjResize(e, currentObjSel(), corner));
+      f.appendChild(h);
+    });
+    host.appendChild(f);
+  }
+}
+
+function updateObjBar() {
+  const tools = $('objTools');
+  if (!tools) return;
+  tools.textContent = '';
+  const sel = state.objMode ? currentObjSel() : null;
+  $('objHint').classList.toggle('hidden', !!sel);
+  if (!sel) return;
+  const label = document.createElement('span');
+  label.className = 'lbl';
+  label.textContent = sel.native ? OBJ_KIND_LABEL[sel.native.kind] : (ANNO_KIND_LABEL[sel.anno.kind] || 'Item');
+  tools.appendChild(label);
+  const del = document.createElement('button');
+  del.className = 'tb';
+  del.id = 'objDelete';
+  del.innerHTML = '<svg class="ic"><use href="#i-trash"/></svg> Delete';
+  del.title = 'Delete the selected object (Del)';
+  del.disabled = objState.busy;
+  del.onclick = () => deleteObjSel();
+  tools.appendChild(del);
+}
+
+function deleteObjSel() {
+  const sel = currentObjSel();
+  if (!sel) return;
+  if (sel.native) { commitObjectEdit(sel.native, { del: true }); return; }
+  removeAnno(sel.anno);
+  drawLayer();
+  drawTextHotspots();
+  renderSelBar();
+  drawObjFrame();
+}
+
+/** A change made in the rotated page view at zoom 1, as a change in page space. */
+function viewToUser(Mv) {
+  const V = objState.views.vp1.transform;
+  return matMul(matMul(V, Mv), matInv(V));
+}
+
+/** A snapshot of the object's patch of page, to drag around until the page is redrawn. */
+function objGhost(o) {
+  const z = state.zoom, r = o.vr;
+  const real = $('pageCanvas');
+  const dpr = (state.canvasCss && state.canvasCss.dpr) || 1;
+  const c = document.createElement('canvas');
+  c.className = 'obj-ghost';
+  c.width = Math.max(1, Math.round(r.w * z * dpr));
+  c.height = Math.max(1, Math.round(r.h * z * dpr));
+  try {
+    c.getContext('2d').drawImage(real, r.x * z * dpr, r.y * z * dpr, r.w * z * dpr, r.h * z * dpr, 0, 0, c.width, c.height);
+  } catch { /* an empty frame is still a fine preview */ }
+  placeBox(c, r);
+  $('objLayer').appendChild(c);
+  return c;
+}
+
+/** Follow one pointer; a cancelled touch (the browser took it to scroll) changes nothing. */
+function trackObjPointer(e, onMove, onEnd) {
+  if (undoLog.timer) checkpoint();
+  gestureActive = true;
+  const id = e.pointerId;
+  const move = (ev) => { if (ev.pointerId === id) onMove(ev.clientX - e.clientX, ev.clientY - e.clientY, ev); };
+  const finish = (ev) => {
+    if (ev.pointerId !== id) return;
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', finish);
+    window.removeEventListener('pointercancel', finish);
+    gestureEndedAt = performance.now();
+    gestureActive = false;
+    onEnd(ev.type === 'pointercancel');
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', finish);
+}
+
+function startNativeDrag(e, o, onClick) {
+  const z = state.zoom;
+  let moved = false, ghost = null, ddx = 0, ddy = 0;
+  trackObjPointer(e, (dx, dy) => {
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!moved) { moved = true; ghost = objGhost(o); }
+    ddx = dx; ddy = dy;
+    ghost.style.left = (o.vr.x * z + dx) + 'px';
+    ghost.style.top = (o.vr.y * z + dy) + 'px';
+    const f = $('objLayer').querySelector('.obj-sel');
+    if (f) f.style.transform = `translate(${dx}px, ${dy}px)`;
+  }, (cancelled) => {
+    if (!moved || cancelled) {
+      if (ghost) ghost.remove();
+      drawObjFrame();
+      if (!moved && !cancelled && onClick) onClick();
+      return;
+    }
+    commitObjectEdit(o, { M: viewToUser([1, 0, 0, 1, ddx / z, ddy / z]) }, ghost);
+  });
+}
+
+function startObjResize(e, sel, corner) {
+  if (!sel || e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (sel.anno) {
+    startResize(e, sel.anno, corner);
+    const follow = () => drawObjFrame();
+    const done = () => {
+      window.removeEventListener('pointermove', follow);
+      window.removeEventListener('pointerup', done);
+      window.removeEventListener('pointercancel', done);
+      drawObjFrame();
+    };
+    window.addEventListener('pointermove', follow);
+    window.addEventListener('pointerup', done);
+    window.addEventListener('pointercancel', done);
+    return;
+  }
+  const o = sel.native, r = o.vr, z = state.zoom;
+  const ax = corner.includes('w') ? r.x + r.w : r.x;
+  const ay = corner.includes('n') ? r.y + r.h : r.y;
+  const uniform = o.kind !== 'path';
+  let sx = 1, sy = 1, ghost = null;
+  trackObjPointer(e, (dx, dy) => {
+    if (!ghost) ghost = objGhost(o);
+    const w = Math.max(2, r.w + (corner.includes('e') ? dx : -dx) / z);
+    const h = Math.max(2, r.h + (corner.includes('s') ? dy : -dy) / z);
+    sx = r.w > 0.5 ? w / r.w : 1;
+    sy = r.h > 0.5 ? h / r.h : 1;
+    if (uniform) { const s = Math.abs(sx - 1) >= Math.abs(sy - 1) ? sx : sy; sx = sy = s; }
+    const nw = r.w * sx, nh = r.h * sy;
+    const f = { x: corner.includes('w') ? ax - nw : ax, y: corner.includes('n') ? ay - nh : ay, w: nw, h: nh };
+    placeBox(ghost, f);
+    const frame = $('objLayer').querySelector('.obj-sel');
+    if (frame) placeBox(frame, f);
+  }, (cancelled) => {
+    if (cancelled || !ghost || (Math.abs(sx - 1) < 0.005 && Math.abs(sy - 1) < 0.005)) {
+      if (ghost) ghost.remove();
+      drawObjFrame();
+      return;
+    }
+    const Mv = matMul(matMul([1, 0, 0, 1, -ax, -ay], [sx, 0, 0, sy, 0, 0]), [1, 0, 0, 1, ax, ay]);
+    commitObjectEdit(o, { M: viewToUser(Mv) }, ghost);
+  });
+}
+
+/** Rewrite the current page with one object changed, and show the result. */
+async function commitObjectEdit(o, edit, ghost) {
+  if (objState.busy) { if (ghost) ghost.remove(); return; }
+  objState.busy = true;
+  updateObjBar();
+  const item = state.pages[state.current];
+  const src = state.sources.get(item.srcId);
+  setStatus(edit.del ? 'Deleting…' : 'Moving…');
+  try {
+    const next = rewriteContent(objState.text, objState.scan, [{ obj: o, ...edit }]);
+    const out = await PDFDocument.create();
+    const [pg] = await out.copyPages(src.libDoc, [item.srcIndex]);
+    out.addPage(pg);
+    pg.node.set(PDFName.of('Contents'), out.context.register(out.context.flateStream(latin1ToBytes(next))));
+    const bytes = await out.save();
+    const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    const id = state.nextSrcId++;
+    state.sources.set(id, { bytes, doc, name: src.name, blank: src.blank, libDoc: out });
+    item.srcId = id;
+    item.srcIndex = 0;
+    objState.sel = null;
+    objState.want = edit.del ? null : { kind: o.kind, box: moveBox(o.box, edit.M) };
+    await renderPage();
+    renderThumbs();
+  } catch (err) {
+    console.error(err);
+    alert('Could not change that object: ' + err.message);
+  } finally {
+    objState.busy = false;
+    if (ghost) ghost.remove();
+    drawObjFrame();
+    scheduleCheckpoint();
+  }
+}
+
+function objPoint(e) {
+  const r = $('stage').getBoundingClientRect();
+  return { x: (e.clientX - r.left) / state.zoom, y: (e.clientY - r.top) / state.zoom };
+}
+
+$('objLayer').addEventListener('pointerdown', (e) => {
+  if (!state.objMode || e.button !== 0 || objState.busy) return;
+  if (e.target.classList.contains('handle')) return;
+  e.stopPropagation();
+  const cur = currentObjSel();
+  const p = objPoint(e);
+  const hits = objHits(p.x, p.y);
+  // A press inside the selection frame takes the selection, even off its ink.
+  const inFrame = cur && e.target.closest('.obj-sel');
+  const target = (inFrame && cur) || (cur && hits.find((h) => sameObjTarget(h, cur))) || hits[0] || null;
+  if (e.pointerType === 'mouse' || inFrame) e.preventDefault();
+  if (!target) { selectObj(null); return; }
+  const wasSelected = sameObjTarget(target, cur);
+  objState.hover = null;
+  if (!wasSelected) selectObj(target);
+  const cycle = () => {
+    // Clicking the selected thing again reaches the one underneath it.
+    if (!wasSelected || hits.length < 2) return;
+    const i = hits.findIndex((h) => sameObjTarget(h, target));
+    selectObj(hits[(i + 1) % hits.length]);
+  };
+  if (target.native) { startNativeDrag(e, target.native, cycle); return; }
+  startDrag(e, target.anno);
+  const follow = () => drawObjFrame();
+  const done = (ev) => {
+    window.removeEventListener('pointermove', follow);
+    window.removeEventListener('pointerup', done);
+    window.removeEventListener('pointercancel', done);
+    if (ev.type === 'pointerup' && !dragMoved) cycle();
+    drawObjFrame();
+  };
+  window.addEventListener('pointermove', follow);
+  window.addEventListener('pointerup', done);
+  window.addEventListener('pointercancel', done);
+});
+
+$('objLayer').addEventListener('pointermove', (e) => {
+  if (!state.objMode || e.buttons || gestureActive || e.pointerType !== 'mouse') return;
+  const p = objPoint(e);
+  const top = objHits(p.x, p.y)[0] || null;
+  $('objLayer').style.cursor = top ? 'move' : '';
+  if (!sameObjTarget(top, objState.hover) || (!top) !== (!objState.hover)) {
+    objState.hover = top;
+    drawObjFrame();
+  }
+});
+$('objLayer').addEventListener('pointerleave', () => {
+  if (objState.hover) { objState.hover = null; drawObjFrame(); }
+});
+
+/** Arrow keys nudge the selection by a point (ten with Shift). */
+function nudgeObj(dx, dy) {
+  const sel = currentObjSel();
+  if (!sel) return;
+  if (sel.anno) {
+    sel.anno.x += dx;
+    sel.anno.y += dy;
+    drawLayer();
+    return;
+  }
+  const o = sel.native, z = state.zoom;
+  const n = objState.nudge || (objState.nudge = { o, dx: 0, dy: 0, ghost: objGhost(o), timer: 0 });
+  if (n.o !== o) return;
+  n.dx += dx;
+  n.dy += dy;
+  n.ghost.style.left = ((o.vr.x + n.dx) * z) + 'px';
+  n.ghost.style.top = ((o.vr.y + n.dy) * z) + 'px';
+  const f = $('objLayer').querySelector('.obj-sel');
+  if (f) f.style.transform = `translate(${n.dx * z}px, ${n.dy * z}px)`;
+  clearTimeout(n.timer);
+  n.timer = setTimeout(() => {
+    objState.nudge = null;
+    commitObjectEdit(o, { M: viewToUser([1, 0, 0, 1, n.dx, n.dy]) }, n.ghost);
+  }, 350);
+}
+
+/** Keys while picking objects; true when the key was used. */
+function objKeydown(e) {
+  if (!state.objMode) return false;
+  const sel = currentObjSel();
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    if (sel) selectObj(null); else setObjMode(false);
+    return true;
+  }
+  if (!sel || objState.busy) return false;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    deleteObjSel();
+    return true;
+  }
+  const step = e.shiftKey ? 10 : 1;
+  const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+  if (arrows[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    nudgeObj(...arrows[e.key]);
+    return true;
+  }
+  return false;
+}
+
+function setObjMode(on) {
+  on = !!on && state.pages.length > 0;
+  state.objMode = on;
+  if (on) {
+    if (state.editMode) setEditMode(false);
+    if (state.markMode) setMarkMode(null);
+    closeTextEditor();
+  }
+  objState.sel = null;
+  objState.hover = null;
+  document.body.classList.toggle('obj-mode', on);
+  $('btnObj').classList.toggle('on', on);
+  $('objBar').classList.toggle('hidden', !on);
+  if (state.activeAnno) { state.activeAnno = null; drawLayer(); renderSelBar(); }
+  if (on) refreshObjects();
+  else $('objLayer').textContent = '';
+  updateObjBar();
+}
+
+$('btnObj').onclick = () => {
+  if (!requireDoc()) return;
+  setObjMode(!state.objMode);
+};
+$('btnObjDone').onclick = () => setObjMode(false);
+
 /* ---------- Edit-text mode ---------- */
 function setEditMode(on) {
   state.editMode = on && state.pages.length > 0;
+  if (state.editMode && state.objMode) setObjMode(false);
   if (!state.editMode) state.activeTable = null;
   if (state.editMode && state.markMode) setMarkMode(null);
   $('btnEdit').classList.toggle('on', state.editMode);
@@ -5556,6 +6856,7 @@ document.addEventListener('keydown', (e) => {
   }
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
   if (typing || document.querySelector('dialog[open]')) return;
+  if (objKeydown(e)) return;
 
   const key = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && (key === 'z' || key === 'y')) {
@@ -5621,14 +6922,14 @@ if (window.__pending) {
   const $ = (id) => document.getElementById(id);
   const body = document.body;
   const isMobile = () => matchMedia('(max-width: 768px)').matches;
-  const LABELS = { file: 'File', home: 'Home', pages: 'Pages', view: 'View', editBar: 'Text Editing', selBar: 'Format' };
+  const LABELS = { file: 'File', home: 'Home', pages: 'Pages', view: 'View', editBar: 'Text Editing', selBar: 'Format', objBar: 'Edit Object' };
   let lastTab = 'home';
 
   /* ----- tabs ----- */
   let current = 'home';
   function activate(name) {
     current = name;
-    const ctx = name === 'editBar' || name === 'selBar';
+    const ctx = name === 'editBar' || name === 'selBar' || name === 'objBar';
     if (!ctx) lastTab = name;
     // On phones the contextual strip is a separate fixed bar, so the sheet
     // keeps showing an ordinary tab instead of going blank.
@@ -5658,15 +6959,22 @@ if (window.__pending) {
       const now = visible(panel);
       tab.classList.toggle('hidden', !now);
       if (now && !was) activate(panelId);
-      if (!now && was && panel.classList.contains('active')) activate(lastTab);
+      if (!now && was && panel.classList.contains('active')) {
+        // Fall back to another strip that is still showing (Edit Object while
+        // an item's Format strip closes), not the full ribbon, so the page
+        // does not jump down under the pointer.
+        const other = ['objBar', 'editBar', 'selBar'].find((id) => id !== panelId && visible($(id)));
+        activate(other || lastTab);
+      }
       was = now;
-      body.classList.toggle('ctx-visible', visible($('editBar')) || visible($('selBar')));
+      body.classList.toggle('ctx-visible', visible($('editBar')) || visible($('selBar')) || visible($('objBar')));
     };
     new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['class'] });
     sync();
   }
   watchCtx('editBar', 'tabEdit');
   watchCtx('selBar', 'tabSel');
+  watchCtx('objBar', 'tabObj');
 
   /* ----- proxies: a second button that drives (and mirrors) a ribbon button ----- */
   function proxy(pid, tid) {
@@ -5680,6 +6988,7 @@ if (window.__pending) {
   proxy('qUndo', 'btnUndo');
   proxy('qRedo', 'btnRedo');
   proxy('mEdit', 'btnEdit');
+  proxy('mObj', 'btnObj');
   proxy('mHl', 'btnHighlight');
   $('btnExtractPg').onclick = () => $('btnExtract').click();
   $('btnZoomIn2').onclick = () => $('btnZoomIn').click();
