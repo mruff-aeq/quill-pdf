@@ -100,7 +100,7 @@ Static files only. Put `index.html` and `vendor/` on any web server. Work.
 ## What it not do?
 
 - **Scan PDF** (picture of page) have no text to edit. Need OCR. Not here.
-- **Password PDF** not open.
+- **Password PDF** (need password to open) not open. PDF locked only against change — like government form — open fine, edit fine.
 - Edit text not re-wrap whole paragraph. Line you edit only.
 - Old text covered, not always deleted from file. Real redaction not here. Cave honest.
 

@@ -1169,7 +1169,7 @@ async function loadFiles(fileList, { replace }) {
       }
     } catch (err) {
       alert('Could not open "' + file.name + '": ' + err.message +
-        '\n\nEncrypted or password-protected PDFs are not supported.');
+        '\n\nPDFs that need a password to open are not supported.');
     }
   }
 
@@ -5282,7 +5282,7 @@ async function buildPdf(pageItems) {
 
   for (const item of pageItems) {
     const src = state.sources.get(item.srcId);
-    if (!src.libDoc) src.libDoc = await PDFDocument.load(src.bytes, { ignoreEncryption: true });
+    if (!src.libDoc) src.libDoc = await openLibDoc(src.bytes);
 
     const [copied] = await out.copyPages(src.libDoc, [item.srcIndex]);
     const page = out.addPage(copied);
@@ -5504,6 +5504,268 @@ $('btnExtract').onclick = async () => {
     alert('Could not extract: ' + err.message);
   }
 };
+
+/* ---------- Opening encrypted files for pdf-lib ----------
+ * A PDF locked with an owner password ("no changes allowed", but nothing to
+ * type to open it) still has every string and stream encrypted, with a key
+ * anyone can derive from the empty user password. pdf.js derives it to draw
+ * the page; pdf-lib does not, so to pdf-lib such a file has no readable
+ * content. The file is therefore parsed here a second time with every object
+ * decrypted as it is read (the standard security handler: RC4 or AES,
+ * revisions 2 to 6). The document that comes out is plain and saves plain.
+ */
+const PDF_PAD = new Uint8Array([0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56,
+  0xff, 0xfa, 0x01, 0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a]);
+const AES_SALT = new Uint8Array([0x73, 0x41, 0x6c, 0x54]);
+
+const concatBytes = (...parts) => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+};
+const bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+
+function md5(bytes) {
+  const K = new Int32Array(64), S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+  for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) | 0;
+  const len = bytes.length, padded = new Uint8Array(((len + 8 >> 6) + 1) << 6);
+  padded.set(bytes);
+  padded[len] = 0x80;
+  const bits = len * 8;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(padded.length - 8, bits >>> 0, true);
+  dv.setUint32(padded.length - 4, Math.floor(bits / 0x100000000), true);
+  let a0 = 0x67452301, b0 = 0xefcdab89 | 0, c0 = 0x98badcfe | 0, d0 = 0x10325476;
+  const M = new Int32Array(16);
+  for (let off = 0; off < padded.length; off += 64) {
+    for (let i = 0; i < 16; i++) M[i] = dv.getInt32(off + i * 4, true);
+    let a = a0, b = b0, c = c0, d = d0;
+    for (let i = 0; i < 64; i++) {
+      let f, g;
+      if (i < 16) { f = (b & c) | (~b & d); g = i; }
+      else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) & 15; }
+      else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) & 15; }
+      else { f = c ^ (b | ~d); g = (7 * i) & 15; }
+      const t = d;
+      d = c; c = b;
+      const x = (a + f + K[i] + M[g]) | 0, s = S[(i >> 4) * 4 + (i & 3)];
+      b = (b + ((x << s) | (x >>> (32 - s)))) | 0;
+      a = t;
+    }
+    a0 = (a0 + a) | 0; b0 = (b0 + b) | 0; c0 = (c0 + c) | 0; d0 = (d0 + d) | 0;
+  }
+  const out = new Uint8Array(16), ov = new DataView(out.buffer);
+  [a0, b0, c0, d0].forEach((v, i) => ov.setInt32(i * 4, v, true));
+  return out;
+}
+
+function rc4(key, data) {
+  const S = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) S[i] = i;
+  for (let i = 0, j = 0; i < 256; i++) {
+    j = (j + S[i] + key[i % key.length]) & 255;
+    [S[i], S[j]] = [S[j], S[i]];
+  }
+  const out = new Uint8Array(data.length);
+  for (let k = 0, i = 0, j = 0; k < data.length; k++) {
+    i = (i + 1) & 255;
+    j = (j + S[i]) & 255;
+    [S[i], S[j]] = [S[j], S[i]];
+    out[k] = data[k] ^ S[(S[i] + S[j]) & 255];
+  }
+  return out;
+}
+
+/* AES and SHA-2 come from Web Crypto, which browsers only offer on a secure
+ * origin (https, localhost or file). Web Crypto's AES-CBC always applies
+ * PKCS#7 padding; the two "raw" helpers work around that for the places the
+ * PDF spec uses CBC without padding. */
+const subtle = () => {
+  const s = globalThis.crypto && globalThis.crypto.subtle;
+  if (!s) throw new Error('This PDF is encrypted, and decrypting it needs Web Crypto: open Quill over https:// or from localhost.');
+  return s;
+};
+const sha = async (bits, data) => new Uint8Array(await subtle().digest(`SHA-${bits}`, data));
+const aesKey = (bytes) => subtle().importKey('raw', bytes, 'AES-CBC', false, ['encrypt', 'decrypt']);
+/** CBC, no padding: encrypt then drop the padding block Web Crypto appends. */
+async function aesEncryptRaw(keyBytes, iv, data) {
+  const out = new Uint8Array(await subtle().encrypt({ name: 'AES-CBC', iv }, await aesKey(keyBytes), data));
+  return out.slice(0, data.length);
+}
+/** CBC, no padding: append a valid padding block (one encrypt of nothing with the last block as IV) so Web Crypto will decrypt. */
+async function aesDecryptRaw(keyBytes, iv, data) {
+  const n = data.length - (data.length % 16);
+  if (!n) return new Uint8Array(0);
+  const key = await aesKey(keyBytes);
+  const body = data.subarray(0, n);
+  const tail = new Uint8Array(await subtle().encrypt({ name: 'AES-CBC', iv: body.subarray(n - 16) }, key, new Uint8Array(0)));
+  return new Uint8Array(await subtle().decrypt({ name: 'AES-CBC', iv }, key, concatBytes(body, tail)));
+}
+/** A string or stream as the PDF stores it: a 16-byte IV, then CBC blocks with PKCS#5 padding. */
+async function aesDecryptCbc(keyBytes, data) {
+  if (data.length < 32) return new Uint8Array(0);
+  const plain = await aesDecryptRaw(keyBytes, data.subarray(0, 16), data.subarray(16));
+  const pad = plain[plain.length - 1];
+  return pad >= 1 && pad <= 16 ? plain.subarray(0, plain.length - pad) : plain;
+}
+
+/** Revision 6 password hashing (ISO 32000-2 algorithm 2.B); revision 5 is a plain SHA-256. */
+async function passwordHash(R, pwd, salt, udata) {
+  let K = await sha(256, concatBytes(pwd, salt, udata));
+  if (R === 5) return K;
+  for (let i = 0; ; i++) {
+    const K1 = new Uint8Array(64 * (pwd.length + K.length + udata.length));
+    for (let k = 0; k < 64; k++) K1.set(concatBytes(pwd, K, udata), k * (pwd.length + K.length + udata.length));
+    const E = await aesEncryptRaw(K.subarray(0, 16), K.subarray(16, 32), K1);
+    const mod = E.subarray(0, 16).reduce((s, b) => s + b, 0) % 3;
+    K = await sha(mod === 0 ? 256 : mod === 1 ? 384 : 512, E);
+    if (i >= 63 && E[E.length - 1] <= i - 31) return K.subarray(0, 32);
+  }
+}
+
+/**
+ * The decryption that a document's /Encrypt dictionary asks for, with the
+ * empty user password: { str(bytes, ref), stm(bytes, ref), skip(ref) }.
+ */
+async function cipherFor(doc) {
+  const L = PDFLib;
+  const ctx = doc.context;
+  const encRef = ctx.trailerInfo.Encrypt;
+  const enc = ctx.lookup(encRef);
+  if (!(enc instanceof L.PDFDict)) throw new Error('The encryption dictionary is missing');
+  const get = (d, k) => (d ? ctx.lookup(d.get(L.PDFName.of(k))) : undefined);
+  const num = (v, d) => (v instanceof L.PDFNumber ? v.asNumber() : d);
+  const name = (v) => (v instanceof L.PDFName ? v.decodeText() : '');
+  const bytes = (v) => (v instanceof L.PDFString || v instanceof L.PDFHexString ? v.asBytes() : new Uint8Array(0));
+  if (name(get(enc, 'Filter')) !== 'Standard') throw new Error('Only password-based (Standard) encryption is supported');
+
+  const V = num(get(enc, 'V'), 0);
+  const R = num(get(enc, 'R'), V >= 4 ? 4 : 2);
+  const O = bytes(get(enc, 'O')), U = bytes(get(enc, 'U'));
+  const P = num(get(enc, 'P'), -1) | 0;
+  const metaBool = get(enc, 'EncryptMetadata');
+  const encryptMetadata = !(metaBool instanceof L.PDFBool) || metaBool.asBoolean();
+  let keyLen = Math.max(5, Math.min(16, (num(get(enc, 'Length'), 40) / 8) | 0));
+
+  // How strings and streams are each encrypted: V4+ names a crypt filter for each.
+  const method = (which) => {
+    if (V < 4) return 'rc4';
+    const cfName = name(get(enc, which)) || 'Identity';
+    if (cfName === 'Identity') return 'none';
+    const cf = get(get(enc, 'CF'), cfName);
+    const cfm = name(get(cf, 'CFM'));
+    const cfLen = num(get(cf, 'Length'), 0);
+    if (cfLen) keyLen = cfLen > 40 ? (cfLen / 8) | 0 : cfLen;
+    return cfm === 'AESV2' || cfm === 'AESV3' ? 'aes' : cfm === 'V2' ? 'rc4' : 'none';
+  };
+  const strMethod = method('StrF'), stmMethod = method('StmF');
+
+  const pwd = new Uint8Array(0);
+  let fileKey;
+  if (R >= 5) {
+    // AES-256: the key is stored, wrapped by a hash of the password and a salt.
+    const userHash = await passwordHash(R, pwd, U.subarray(32, 40), new Uint8Array(0));
+    const asUser = bytesToHex(userHash) === bytesToHex(U.subarray(0, 32));
+    const salt = asUser ? U.subarray(40, 48) : O.subarray(40, 48);
+    const udata = asUser ? new Uint8Array(0) : U.subarray(0, 48);
+    const wrapped = bytes(get(enc, asUser ? 'UE' : 'OE'));
+    fileKey = await aesDecryptRaw(await passwordHash(R, pwd, salt, udata), new Uint8Array(16), wrapped);
+  } else {
+    const ids = ctx.lookup(ctx.trailerInfo.ID);
+    const id0 = ids instanceof L.PDFArray && ids.size() ? bytes(ctx.lookup(ids.get(0))) : new Uint8Array(0);
+    const pBytes = new Uint8Array(4);
+    new DataView(pBytes.buffer).setInt32(0, P, true);
+    const n = R === 2 ? 5 : keyLen;
+    let key = md5(concatBytes(PDF_PAD, O.subarray(0, 32), pBytes, id0,
+      R >= 4 && !encryptMetadata ? new Uint8Array([0xff, 0xff, 0xff, 0xff]) : new Uint8Array(0)));
+    if (R >= 3) for (let i = 0; i < 50; i++) key = md5(key.subarray(0, n));
+    fileKey = key.subarray(0, n);
+  }
+
+  const objectKey = (ref, aes) => {
+    if (R >= 5) return fileKey;
+    const tail = new Uint8Array([ref.objectNumber & 255, (ref.objectNumber >> 8) & 255, (ref.objectNumber >> 16) & 255,
+      ref.generationNumber & 255, (ref.generationNumber >> 8) & 255]);
+    return md5(concatBytes(fileKey, tail, aes ? AES_SALT : new Uint8Array(0))).subarray(0, Math.min(fileKey.length + 5, 16));
+  };
+  const apply = (how, data, ref) => {
+    if (how === 'aes') return aesDecryptCbc(objectKey(ref, true), data);
+    if (how === 'rc4') return rc4(objectKey(ref, false), data);
+    return data;
+  };
+  return {
+    str: (data, ref) => apply(strMethod, data, ref),
+    stm: (data, ref) => apply(stmMethod, data, ref),
+    encryptMetadata,
+    skip: (ref) => encRef instanceof L.PDFRef && ref.toString() === encRef.toString(),
+  };
+}
+
+/** The object with every string and stream in it decrypted, as pdf-lib objects. */
+async function decryptObject(obj, ref, cipher) {
+  const L = PDFLib;
+  if (obj instanceof L.PDFString || obj instanceof L.PDFHexString) {
+    return L.PDFHexString.of(bytesToHex(await cipher.str(obj.asBytes(), ref)));
+  }
+  if (obj instanceof L.PDFArray) {
+    for (let i = 0; i < obj.size(); i++) obj.set(i, await decryptObject(obj.get(i), ref, cipher));
+    return obj;
+  }
+  if (obj instanceof L.PDFRawStream) {
+    await decryptObject(obj.dict, ref, cipher);
+    const isMetadata = obj.dict.get(L.PDFName.of('Type')) === L.PDFName.of('Metadata');
+    if (isMetadata && !cipher.encryptMetadata) return obj;
+    const contents = await cipher.stm(obj.contents, ref);
+    obj.dict.set(L.PDFName.of('Length'), L.PDFNumber.of(contents.length));
+    return L.PDFRawStream.of(obj.dict, contents);
+  }
+  if (obj instanceof L.PDFDict) {
+    for (const [k, v] of obj.entries()) obj.set(k, await decryptObject(v, ref, cipher));
+    return obj;
+  }
+  return obj;
+}
+
+const ENDOBJ = Array.from('endobj', (c) => c.charCodeAt(0));
+/** pdf-lib's parser, decrypting each top-level object before object streams inside it are unpacked. */
+class DecryptingParser extends PDFLib.PDFParser {
+  constructor(bytes, cipher) {
+    super(bytes, PDFLib.ParseSpeeds.Slow, false, false);
+    this.cipher = cipher;
+  }
+  async parseIndirectObject() {
+    const L = PDFLib;
+    const ref = this.parseIndirectObjectHeader();
+    this.skipWhitespaceAndComments();
+    let object = this.parseObject();
+    this.skipWhitespaceAndComments();
+    this.matchKeyword(ENDOBJ);
+    const type = object instanceof L.PDFRawStream ? object.dict.lookup(L.PDFName.of('Type')) : null;
+    // Cross-reference streams are never encrypted, nor is the encryption dictionary itself.
+    if (type === L.PDFName.of('XRef')) {
+      L.PDFXRefStreamParser.forStream(object).parseIntoContext();
+      return ref;
+    }
+    if (!this.cipher.skip(ref)) object = await decryptObject(object, ref, this.cipher);
+    if (type === L.PDFName.of('ObjStm')) {
+      await L.PDFObjectStreamParser.forStream(object, this.shouldWaitForTick).parseIntoContext();
+    } else {
+      this.context.assign(ref, object);
+    }
+    return ref;
+  }
+}
+
+/** The document for pdf-lib, decrypted first when the file is encrypted. */
+async function openLibDoc(bytes) {
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  if (!doc.isEncrypted) return doc;
+  const cipher = await cipherFor(doc);
+  const context = await new DecryptingParser(bytes, cipher).parseDocument();
+  delete context.trailerInfo.Encrypt;
+  return new PDFDocument(context, false, true);
+}
 
 /* ==== OBJECT ENGINE START ==== */
 /* ---------- Edit object: the page's own content as movable objects ----------
@@ -6372,7 +6634,7 @@ async function refreshObjects() {
   if (objState.key !== key) {
     const src = state.sources.get(item.srcId);
     try {
-      if (!src.libDoc) src.libDoc = await PDFDocument.load(src.bytes, { ignoreEncryption: true });
+      if (!src.libDoc) src.libDoc = await openLibDoc(src.bytes);
       objState.text = readPageContent(src.libDoc, item.srcIndex);
       objState.scan = scanContent(objState.text, pageResources(src.libDoc, item.srcIndex));
     } catch (err) {
