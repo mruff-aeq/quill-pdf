@@ -1147,14 +1147,31 @@ async function loadFiles(fileList, { replace }) {
     const prog = (f, msg) => setProgress((fi + f) / files.length, msg);
     try {
       prog(0.02, `Reading ${file.name}…`);
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      let bytes = new Uint8Array(await file.arrayBuffer());
       prog(0.08, `Opening ${file.name}…`);
       // pdf.js takes ownership of the buffer it is given, so hand it a copy.
       const task = pdfjsLib.getDocument({ data: bytes.slice() });
       task.onProgress = ({ loaded, total }) => { if (total) prog(0.08 + 0.22 * (loaded / total)); };
-      const doc = await task.promise;
+      let doc = await task.promise;
+      // An owner-locked file is decrypted for pdf-lib now, and a form's fields are
+      // painted into its pages; pdf.js then shows the document pdf-lib will edit.
+      let libDoc = null;
+      try {
+        const { info } = await doc.getMetadata();
+        if (info.EncryptFilterName || info.IsAcroFormPresent) {
+          prog(0.2, `Preparing ${file.name}…`);
+          libDoc = await openLibDoc(bytes);
+          if (flattenWidgets(libDoc)) {
+            bytes = await libDoc.save({ useObjectStreams: false });
+            doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not prepare the file; opening it as it is', err);
+        libDoc = null;
+      }
       const srcId = state.nextSrcId++;
-      state.sources.set(srcId, { bytes, doc, name: file.name });
+      state.sources.set(srcId, { bytes, doc, name: file.name, libDoc });
       const n = doc.numPages;
       // Page proxies are fetched in batches: one worker round trip per page
       // serialises badly on long documents.
@@ -5765,6 +5782,150 @@ async function openLibDoc(bytes) {
   const context = await new DecryptingParser(bytes, cipher).parseDocument();
   delete context.trailerInfo.Encrypt;
   return new PDFDocument(context, false, true);
+}
+
+/* ---------- Form fields as page content ----------
+ * A filled-in form keeps what was typed in widget annotations, each drawn over
+ * the page from its own appearance stream. Nothing in Quill edits annotations,
+ * so when a form is opened its widgets are painted into the page itself: the
+ * appearance is copied inline into the content, placed at the widget's
+ * rectangle the way a viewer places it, with its resources merged into the
+ * page's (renamed where a name is already in use), and the widget removed.
+ * The fields then read as ordinary text and shapes to Edit text and Edit
+ * object, and the file saves looking the way it did.
+ */
+const RESOURCE_KINDS = ['Font', 'XObject', 'ExtGState', 'ColorSpace', 'Pattern', 'Shading', 'Properties'];
+const decodePdfName = (raw) => raw.replace(/#([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+
+/** Content text with resource names swapped (old → new), leaving strings and inline image data alone. */
+function renameResources(text, renames) {
+  if (!renames.size) return text;
+  const guarded = [];
+  const collect = (a) => {
+    if (Array.isArray(a)) a.forEach(collect);
+    else if (a && a.str !== undefined && a.raw) guarded.push(a.raw);
+  };
+  for (const op of lexContent(text)) {
+    if (op.op === 'BI') guarded.push([op.opStart, op.end]);
+    else op.args.forEach(collect);
+  }
+  guarded.sort((a, b) => a[0] - b[0]);
+  let gi = 0;
+  return text.replace(/\/([^\s()<>[\]{}/%]*)/g, (tok, name, at) => {
+    while (gi < guarded.length && guarded[gi][1] <= at) gi++;
+    if (gi < guarded.length && guarded[gi][0] <= at) return tok;
+    const to = renames.get(decodePdfName(name));
+    return to ? '/' + to : tok;
+  });
+}
+
+/**
+ * Paint every widget annotation into its page's content and remove it.
+ * Returns how many widgets were flattened.
+ */
+function flattenWidgets(doc) {
+  const L = PDFLib;
+  const ctx = doc.context;
+  const N = (k) => L.PDFName.of(k);
+  const num = (v, d = 0) => (v instanceof L.PDFNumber ? v.asNumber() : d);
+  const nums = (v) => (v instanceof L.PDFArray ? v.asArray().map((x) => num(ctx.lookup(x))) : null);
+  let flattened = 0;
+  let serial = 0;
+
+  for (const page of doc.getPages()) {
+    const node = page.node;
+    const annots = ctx.lookup(node.get(N('Annots')));
+    if (!(annots instanceof L.PDFArray) || !annots.size()) continue;
+    node.normalize();
+    const res = node.Resources();
+    // Names in use by any kind of page resource: an inlined stream's names
+    // must be free across all of them, since one rename covers the whole stream.
+    const taken = new Set();
+    const kindDicts = new Map();
+    for (const kind of RESOURCE_KINDS) {
+      const d = res.lookup(N(kind));
+      if (d instanceof L.PDFDict) {
+        kindDicts.set(kind, d);
+        d.keys().forEach((k) => taken.add(k.decodeText()));
+      }
+    }
+
+    /** The widget drawn in page space, '' when it shows nothing, null when it is not a widget to flatten. */
+    const widgetContent = (a) => {
+      const flags = num(ctx.lookup(a.get(N('F'))));
+      if (flags & 2 || flags & 32) return '';      // hidden, or not for viewing
+      const ap = ctx.lookup(a.get(N('AP')));
+      let n = ap instanceof L.PDFDict ? ctx.lookup(ap.get(N('N'))) : null;
+      if (n instanceof L.PDFDict) {                 // one appearance per state: the current one
+        const as = a.get(N('AS'));
+        const keys = n.keys();
+        const key = as instanceof L.PDFName ? as : keys.length === 1 ? keys[0] : null;
+        n = key ? ctx.lookup(n.get(key)) : null;
+      }
+      if (!(n instanceof L.PDFRawStream)) return '';
+      const rect = nums(ctx.lookup(a.get(N('Rect'))));
+      const bbox = nums(n.dict.lookup(N('BBox')));
+      if (!rect || rect.length !== 4 || !bbox || bbox.length !== 4) return '';
+      const mtx = nums(n.dict.lookup(N('Matrix')));
+      const matrix = mtx && mtx.length === 6 ? mtx : MAT_I;
+      // The form's box, as its matrix places it, is scaled and moved to fill the rectangle (ISO 32000 12.5.5).
+      const tb = quadBox([[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], bbox[3]], [bbox[0], bbox[3]]].map(([x, y]) => matApply(matrix, x, y)));
+      const rx = Math.min(rect[0], rect[2]), ry = Math.min(rect[1], rect[3]);
+      const rw = Math.abs(rect[2] - rect[0]), rh = Math.abs(rect[3] - rect[1]);
+      const sx = tb.x1 - tb.x0 > 1e-9 ? rw / (tb.x1 - tb.x0) : 1;
+      const sy = tb.y1 - tb.y0 > 1e-9 ? rh / (tb.y1 - tb.y0) : 1;
+      const A = [sx, 0, 0, sy, rx - tb.x0 * sx, ry - tb.y0 * sy];
+
+      let text;
+      try { text = bytesToLatin1(decodePDFRawStream(n).decode()); } catch { return ''; }
+      const renames = new Map();
+      const apRes = n.dict.lookup(N('Resources'));
+      if (apRes instanceof L.PDFDict) {
+        for (const kind of RESOURCE_KINDS) {
+          const d = apRes.lookup(N(kind));
+          if (!(d instanceof L.PDFDict)) continue;
+          let target = kindDicts.get(kind);
+          if (!target) {
+            target = ctx.obj({});
+            res.set(N(kind), target);
+            kindDicts.set(kind, target);
+          }
+          for (const [key, val] of d.entries()) {
+            const name = key.decodeText();
+            let to = renames.get(name);
+            if (!to) {
+              const mine = target.get(key);
+              if (mine !== undefined && String(mine) === String(val)) continue;   // the page already has this very object under this name
+              if (mine === undefined && !taken.has(name)) to = name;
+              else { do to = `Q${++serial}`; while (taken.has(to)); renames.set(name, to); }
+            }
+            target.set(N(to), val);
+            taken.add(to);
+          }
+        }
+      }
+      text = renameResources(text, renames);
+      // An appearance that leaves graphics states pushed would skew everything after it.
+      const depth = lexContent(text).reduce((d, o) => d + (o.op === 'q') - (o.op === 'Q'), 0);
+      const place = matrix === MAT_I ? '' : `${matStr(matrix)} cm\n`;
+      return `q\n${matStr(A)} cm\n${place}${[bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]].map(pdfNumStr).join(' ')} re W n\n` +
+        `${text}\n${'Q\n'.repeat(Math.max(0, depth))}Q\n`;
+    };
+
+    let drawn = '';
+    const keep = [];
+    for (const ref of annots.asArray()) {
+      const a = ctx.lookup(ref);
+      if (!(a instanceof L.PDFDict) || a.get(N('Subtype')) !== N('Widget')) { keep.push(ref); continue; }
+      drawn += widgetContent(a);
+      flattened++;
+    }
+    if (keep.length === annots.size()) continue;
+    if (drawn) node.addContentStream(ctx.register(ctx.flateStream(latin1ToBytes(drawn))));
+    node.set(N('Annots'), ctx.obj(keep));
+  }
+  if (flattened) doc.catalog.delete(N('AcroForm'));
+  return flattened;
 }
 
 /* ==== OBJECT ENGINE START ==== */

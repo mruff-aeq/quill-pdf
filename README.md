@@ -97,10 +97,17 @@ Static files only. Put `index.html` and `vendor/` on any web server. Work.
 
 ---
 
+### 📋 Filled form
+
+Form from government, bank, school, fields already typed? Quill paint fields into page when open. Field text now just text. Edit text grab it. Edit object grab it. Form locked "no change allowed" open fine too. No password needed, cave not care.
+
+---
+
 ## What it not do?
 
 - **Scan PDF** (picture of page) have no text to edit. Need OCR. Not here.
 - **Password PDF** (need password to open) not open. PDF locked only against change — like government form — open fine, edit fine.
+- Form field not stay fillable after Quill. Field become flat text. Edit like text.
 - Edit text not re-wrap whole paragraph. Line you edit only.
 - Old text covered, not always deleted from file. Real redaction not here. Cave honest.
 
