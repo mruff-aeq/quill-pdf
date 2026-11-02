@@ -668,6 +668,8 @@ window.__pending = null;
   <symbol id="i-rotl" viewBox="0 0 24 24"><path d="M3 5v5h5"/><path d="M3.5 10a8.5 8.5 0 1 1 1.6 5.5"/><rect x="9" y="12" width="9" height="8" rx="1"/></symbol>
   <symbol id="i-rotr" viewBox="0 0 24 24"><path d="M21 5v5h-5"/><path d="M20.5 10a8.5 8.5 0 1 0-1.6 5.5"/><rect x="6" y="12" width="9" height="8" rx="1"/></symbol>
   <symbol id="i-dup" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="1.5"/><path d="M16 8V4.5A1.5 1.5 0 0 0 14.5 3h-10A1.5 1.5 0 0 0 3 4.5v10A1.5 1.5 0 0 0 4.5 16H8"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="12" rx="1.5"/><path d="M15 9V5.5A1.5 1.5 0 0 0 13.5 4h-8A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H9"/></symbol>
+  <symbol id="i-paste" viewBox="0 0 24 24"><path d="M9 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V6.5A1.5 1.5 0 0 0 17.5 5H15"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h6"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></symbol>
   <symbol id="i-zin" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/><path d="M7.5 10.5h6M10.5 7.5v6"/></symbol>
   <symbol id="i-zout" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/><path d="M7.5 10.5h6"/></symbol>
@@ -739,6 +741,13 @@ window.__pending = null;
     </section>
 
     <section class="rpanel active" data-tab="home">
+      <div class="rgroup">
+        <div class="rg-items">
+          <button class="rb big primary" id="btnPaste" title="Paste the copied item onto the page you are viewing (Ctrl+V)" disabled><svg class="ic big"><use href="#i-paste"/></svg><span>Paste</span></button>
+          <button class="rb big" id="btnCopy" title="Copy the selected item (Ctrl+C)" disabled><svg class="ic big"><use href="#i-copy"/></svg><span>Copy</span></button>
+        </div>
+        <div class="rg-label">Clipboard</div>
+      </div>
       <div class="rgroup">
         <div class="rg-items">
           <button class="rb big" id="btnUndo" title="Undo (Ctrl+Z)" disabled><svg class="ic big"><use href="#i-undo"/></svg><span>Undo</span></button>
@@ -3841,6 +3850,7 @@ function openTextEditor(a, isNew) {
     layerControls(a, number, button);
     sep();
 
+    button('<svg class="ic"><use href="#i-copy"/></svg> Copy', 'Copy this text box (paste it on any page)', false, () => copySelection());
     button(a.lines.length ? 'Restore original' : 'Delete',
       a.lines.length ? 'Put the original text back' : 'Delete this text box', false,
       () => { removeAnno(a); finish(); });
@@ -3952,7 +3962,7 @@ function openTextEditor(a, isNew) {
     // Opening the ribbon sheet, switching its tabs, or using its Bring to
     // front / Send to back buttons acts on this box, so it stays open.
     const t = e.target;
-    if (t.closest('#mTabBtn, #scrim, #btnFront, #btnBack, .rtab, .sheet-handle')) return;
+    if (t.closest('#mTabBtn, #scrim, #btnFront, #btnBack, #btnCopy, .rtab, .sheet-handle')) return;
     if (t.closest('#ribbon') && !t.closest('button, label')) return;
     // The click that ends a rotate drag released somewhere off the handle.
     if (performance.now() - gestureEndedAt < 80) return;
@@ -4280,6 +4290,7 @@ function updateLayerButtons() {
   const off = !layerTarget() && !nativeLayerTarget();
   $('btnFront').disabled = off;
   $('btnBack').disabled = off;
+  $('btnCopy').disabled = !copyTarget();
 }
 
 function layerFromRibbon(how) {
@@ -4925,6 +4936,7 @@ function renderSelBar() {
   layerControls(a, number, button);
   sep();
 
+  button('<svg class="ic"><use href="#i-copy"/></svg> Copy', 'Copy this item (Ctrl+C)', false, () => copySelection());
   button('Delete', 'Delete this item (Del)', false, () => removeAnno(a));
 }
 $('layer').addEventListener('pointerdown', (e) => {
@@ -7095,6 +7107,9 @@ function updateObjBar() {
   const sep2 = document.createElement('span');
   sep2.className = 'tb-sep';
   tools.appendChild(sep2);
+  button('objCopy', '<svg class="ic"><use href="#i-copy"/></svg> Copy',
+    sel.native && sel.native.kind !== 'text' ? 'Copy the selected object as a picture (Ctrl+C)' : 'Copy the selected object (Ctrl+C)',
+    () => copySelection());
   button('objDelete', '<svg class="ic"><use href="#i-trash"/></svg> Delete', 'Delete the selected object (Del)', () => deleteObjSel());
 }
 
@@ -7607,6 +7622,128 @@ $('viewer').addEventListener('drop', (e) => {
   loadFiles(e.dataTransfer.files, { replace: !state.pages.length });
 });
 
+/* ---------- Clipboard: copy and paste items ----------
+ * One slot, held in memory. Copy takes the selected item wherever it was
+ * picked: the Format bar, an open text box, or Edit object mode. Paste puts a
+ * copy on the page being viewed, stepped down and right when it lands on the
+ * page it came from, and selects it. The page's own objects copy too: a text
+ * line becomes an editable text box with the same look; a shape, image or
+ * graphic is copied as a picture, rendered crisply from the page.
+ */
+const clip = { item: null, label: '', page: -1, pastes: 0 };
+const PASTE_STEP = 12;   // pt, like Word's paste offset
+
+const clipLabel = (a) => (a.mark ? MARKS[a.mark].label : a.hl ? 'Highlight' : ANNO_KIND_LABEL[a.kind] || 'Item').toLowerCase();
+
+/** What Copy would take right now: { anno } or { native }, or null. */
+function copyTarget() {
+  if (editor) return { anno: editor.a };
+  if (state.objMode) return currentObjSel();
+  const a = state.activeAnno;
+  return a && LAYERABLE.has(a.kind) ? { anno: a } : null;
+}
+
+/** A free-standing copy of an added item. An edit box lets go of the original lines it replaced. */
+function copyOfAnno(a) {
+  const c = structuredClone(a);
+  if (c.kind === 'edit') { c.lines = []; c.original = c.text; }
+  return c;
+}
+
+/** The page's own text line, as a new text box matching its font, size, colour and alignment. */
+function editFromNativeText(o) {
+  const r = o.ur;
+  const lines = state.lines.filter((l) => rectOverlap(l, r) > 0.5 * l.w * l.h)
+    .sort((p, q) => (p.y - q.y) || (p.x - q.x));
+  if (!lines.length) return null;
+  const last = lines[lines.length - 1];
+  const pitch = lines.length > 1 ? ((last.y + last.bl) - (lines[0].y + lines[0].bl)) / (lines.length - 1) : 0;
+  const a = editFromBlock(blockFromLines(lines, pitch));
+  a.lines = [];
+  return a;
+}
+
+/** A page object rendered on its own, at print resolution, as a picture item in its place. */
+async function nativePicture(o) {
+  const item = state.pages[state.current];
+  const page = await getPdfPage(item);
+  const pad = 1;
+  const r = { x: o.vr.x - pad, y: o.vr.y - pad, w: o.vr.w + 2 * pad, h: o.vr.h + 2 * pad };
+  const s = Math.min(8, Math.max(2, 1600 / Math.max(r.w, r.h, 1)));
+  const vp = page.getViewport({ scale: s, rotation: item.rotation, offsetX: -r.x * s, offsetY: -r.y * s });
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.ceil(r.w * s));
+  c.height = Math.max(1, Math.ceil(r.h * s));
+  await page.render({ canvasContext: c.getContext('2d'), viewport: vp, background: 'rgba(0,0,0,0)' }).promise;
+  return { kind: 'image', x: r.x, y: r.y, w: r.w, h: r.h, dataUrl: c.toDataURL('image/png'), mime: 'image/png' };
+}
+
+function setClip(item, label) {
+  clip.item = item;
+  clip.label = label;
+  clip.page = state.current;
+  clip.pastes = 0;
+  $('btnPaste').disabled = false;
+  setStatus(`Copied ${label}. Paste (Ctrl+V) puts it on the page you are viewing.`);
+}
+
+async function copySelection() {
+  const t = copyTarget();
+  if (!t) return;
+  if (t.anno) { setClip(copyOfAnno(t.anno), clipLabel(t.anno)); return; }
+  const o = t.native;
+  if (objState.busy) return;
+  if (o.kind === 'text') {
+    const a = editFromNativeText(o);
+    if (a) { setClip(a, 'text'); return; }
+  }
+  setStatus('Copying as a picture…');
+  try {
+    setClip(await nativePicture(o), `${OBJ_KIND_LABEL[o.kind].toLowerCase()} (as a picture)`);
+  } catch (err) {
+    console.error(err);
+    setStatus('Could not copy that object: ' + err.message);
+  }
+}
+
+function pasteClip() {
+  if (!clip.item) { setStatus('Nothing to paste yet: select an item and click Copy.'); return; }
+  if (!requireDoc()) return;
+  const a = structuredClone(clip.item);
+  // On the page it came from, each paste steps further so the copies do not pile up.
+  if (clip.page === state.current) {
+    clip.pastes++;
+    a.x += PASTE_STEP * clip.pastes;
+    a.y += PASTE_STEP * clip.pastes;
+  }
+  // Keep it on the page: edit boxes live in unrotated page space, everything else in the rotated view.
+  const turned = state.pages[state.current].rotation % 180 !== 0 && a.kind !== 'edit';
+  const W = turned ? state.pageHeight : state.pageWidth;
+  const H = turned ? state.pageWidth : state.pageHeight;
+  const b = annoBox(a);
+  if (a.x + b.w > W) a.x = Math.max(0, W - b.w);
+  if (a.y + b.h > H) a.y = Math.max(0, H - b.h);
+
+  closeTextEditor();
+  state.pages[state.current].annos.push(a);
+  if (state.objMode) {
+    drawLayer();   // also redraws the object boxes
+    drawTextHotspots();
+    selectObj({ anno: a });
+  } else if (a.kind === 'edit') {
+    drawLayer();
+    drawTextHotspots();
+    openTextEditor(a, false);
+  } else {
+    selectAnno(a);
+    drawTextHotspots();
+  }
+  setStatus(`Pasted ${clip.label} on page ${state.current + 1}. Drag it where you want it.`);
+}
+
+$('btnCopy').onclick = () => copySelection();
+$('btnPaste').onclick = () => pasteClip();
+
 /* Keyboard: delete the selected item, arrow keys page through the document */
 document.addEventListener('keydown', (e) => {
   if (editor) {
@@ -7622,6 +7759,14 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (key === 'y' || e.shiftKey) redo(); else undo();
     return;
+  }
+  // Copy and paste items, unless the user is copying text they selected on the page chrome.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (key === 'c' || key === 'v') && !String(getSelection())) {
+    if (key === 'c' ? copyTarget() : clip.item) {
+      e.preventDefault();
+      if (key === 'c') copySelection(); else pasteClip();
+      return;
+    }
   }
 
   if (e.key === 'Escape' && state.markMode) {

@@ -62,6 +62,15 @@ Snap to text line. Cave not need steady hand.
 - Thing hide behind other thing? Click it. Type layer number, or ▲ up one, ▼ down one, ⤒ above all, ⤓ below all. Ctrl+] and Ctrl+[ same. Shift for above all and below all.
 - On phone: pick thing, open menu, Home, Markup. Bring to front. Send to back.
 
+### 📋 Copy and paste
+
+Pick thing. Click **Copy** (it sit next to Delete, in Format bar, in text box bar, in Edit object bar). Go to any page. Click **Paste** on Home tab. Copy appear, already picked. Drag it where cave want.
+
+- Ctrl+C and Ctrl+V do same.
+- Paste on same page? Copy step down and right, so cave can see both.
+- Edit object: copy page's own text, get text box look same. Copy shape, picture or graphic, get picture of it.
+- Undo work.
+
 ### 📄 Pages
 
 - Open many PDF. Merge. Reorder by drag.
