@@ -238,13 +238,16 @@ window.__pending = null;
   .obj-box.k-item { border-style: dashed; }
   .obj-box.k-path { border-color: rgba(43,87,154,.22); }
   .obj-hover { background: rgba(43,87,154,.16); }
-  .obj-del {
+  .obj-del, .obj-dup {
     position: absolute; right: -28px; top: -4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
     background: #c42b1c; color: #fff; display: flex; align-items: center; justify-content: center;
     cursor: pointer; pointer-events: auto; touch-action: none; box-shadow: 0 1px 2px rgba(0,0,0,.25);
   }
   .obj-del:hover { background: #a4262c; }
+  .obj-dup { top: 20px; background: var(--accent); }
+  .obj-dup:hover { background: var(--word-dk); }
   .obj-sel.tight-r .obj-del { right: -4px; top: -30px; }
+  .obj-sel.tight-r .obj-dup { right: 20px; top: -30px; }
   .obj-sel.tight-l .move-handle { left: -4px; top: -30px; }
   .obj-ghost { opacity: .85; outline: 1px dashed var(--accent); }
   .et-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
@@ -572,10 +575,12 @@ window.__pending = null;
     .et-tools > * { flex: none; }
     /* finger-sized object icons */
     .obj-sel .move-handle { width: 28px; height: 28px; line-height: 28px; font-size: 17px; left: -36px; top: -8px; }
-    .obj-del { width: 28px; height: 28px; right: -36px; top: -8px; }
+    .obj-del, .obj-dup { width: 28px; height: 28px; right: -36px; top: -8px; }
+    .obj-dup { top: 24px; }
     .obj-sel .rot-handle { width: 20px; height: 20px; margin-left: -10px; top: -36px; }
     .obj-sel .rot-handle::after { top: 18px; height: 16px; }
     .obj-sel.tight-r .obj-del { right: -6px; top: -40px; }
+    .obj-sel.tight-r .obj-dup { right: 26px; top: -40px; }
     .obj-sel.tight-l .move-handle { left: -6px; top: -40px; }
     #btnEditDone, #btnObjDone { position: sticky; right: -10px; flex: none; margin-left: 0; background: #fff; box-shadow: -8px 0 8px #fff; }
     .tb, .et-tools .tb, .et-tools .tb-swatch { height: 34px; min-width: 34px; }
@@ -3684,6 +3689,11 @@ function openTextEditor(a, isNew) {
   grip.addEventListener('pointerdown', (e) => startDrag(e, a));
   frame.appendChild(grip);
   addResizeHandles(frame, a);
+  frameBadges(frame, {
+    deleteTitle: a.lines.length ? 'Put the original text back' : 'Delete this text box',
+    onDelete: () => { removeAnno(a); finish(); },
+    onDuplicate: () => duplicateSelection(),
+  });
   $('tlInput').appendChild(frame);
 
   editor = { a, finish, frame, fit: () => fit(), refocus: () => refocus(), renderBar: () => renderBar() };
@@ -7054,15 +7064,35 @@ function drawObjFrame() {
     rh.addEventListener('pointerdown', (e) => startObjRotate(e, currentObjSel()));
     f.appendChild(rh);
   }
-  const del = document.createElement('button');
-  del.className = 'obj-del';
-  del.title = 'Delete (Del)';
-  del.setAttribute('aria-label', 'Delete');
-  del.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
-  del.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
-  del.addEventListener('click', (e) => { e.stopPropagation(); deleteObjSel(); });
-  f.appendChild(del);
+  frameBadges(f, { onDelete: () => deleteObjSel(), onDuplicate: () => duplicateSelection() });
   host.appendChild(f);
+}
+
+/**
+ * The red × and, under it, the blue duplicate badge that sit beside a
+ * selection frame: the object frame in Edit object mode and the text box
+ * frame in Edit text mode. Pointer presses are swallowed so they neither
+ * start a drag nor take the caret out of an open text box.
+ */
+function frameBadges(host, { onDelete, onDuplicate, deleteTitle = 'Delete (Del)' }) {
+  const make = (cls, title, svg, fn) => {
+    const b = document.createElement('button');
+    b.className = cls;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = svg;
+    b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+    host.appendChild(b);
+    return b;
+  };
+  make('obj-del', deleteTitle,
+    '<svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+    onDelete);
+  make('obj-dup', 'Duplicate (Ctrl+C, Ctrl+V)',
+    '<svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="6" y="6" width="7.5" height="7.5" rx="1"/><path d="M10 6V3.5A1 1 0 0 0 9 2.5H3.5a1 1 0 0 0-1 1V9a1 1 0 0 0 1 1H6"/></svg>',
+    onDuplicate);
 }
 
 function updateObjBar() {
@@ -7739,6 +7769,14 @@ function pasteClip() {
     drawTextHotspots();
   }
   setStatus(`Pasted ${clip.label} on page ${state.current + 1}. Drag it where you want it.`);
+}
+
+/** Copy the selection and paste it at once, a step down and right. */
+async function duplicateSelection() {
+  if (!copyTarget()) return;
+  const before = clip.item;
+  await copySelection();
+  if (clip.item !== before) pasteClip();
 }
 
 $('btnCopy').onclick = () => copySelection();
